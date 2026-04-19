@@ -68,6 +68,20 @@ float* cubelut_create_rgba_buffer(const cubelut_lut_t* lut, size_t* out_byte_siz
 uint16_t* cubelut_create_rgba16_buffer(const cubelut_lut_t* lut, size_t* out_byte_size);
 
 /**
+ * Gets a direct, zero-copy pointer to the internal RGB floating-point data.
+ * The layout is tightly packed RGB (e.g., R, G, B, R, G, B...).
+ * 
+ * WARNING: The returned pointer is owned by the LUT object. It becomes invalid
+ * as soon as `cubelut_free(lut)` is called. Do NOT free this pointer.
+ * 
+ * @param lut The LUT object.
+ * @param out_num_floats Returns the total number of floats (size * size * size * 3 for 3D LUTs).
+ *                       If NULL is passed, this parameter is ignored.
+ * @return A constant pointer to the internal float array.
+ */
+const float* cubelut_get_raw_rgb_data(const cubelut_lut_t* lut, size_t* out_num_floats);
+
+/**
  * Frees a buffer previously returned by cubelut_create_rgba_buffer or cubelut_create_rgba16_buffer.
  */
 void cubelut_free_buffer(void* buffer);

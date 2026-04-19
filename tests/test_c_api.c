@@ -137,6 +137,45 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // --- Test Raw Zero-Copy Pointer Generation ---
+    printf("\nTesting Raw Zero-Copy RGB Pointer:\n");
+    size_t num_raw_floats = 0;
+    const float* raw_rgb = cubelut_get_raw_rgb_data(lut, &num_raw_floats);
+
+    if (!raw_rgb) {
+        fprintf(stderr, "Error: Failed to get raw RGB pointer.\n");
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+
+    size_t expected_raw_floats = expected_pixels * 3;
+    printf("  Total Floats: %zu (Expected: %zu)\n", num_raw_floats, expected_raw_floats);
+
+    if (num_raw_floats != expected_raw_floats) {
+        fprintf(stderr, "Error: Raw floats count mismatch.\n");
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+
+    // Compare raw data vs buffered data
+    printf("Comparing internal raw pointer with the extracted buffers...\n");
+    for (int i = 0; i < 3; ++i) {
+        if (raw_rgb[i*3 + 0] != rgba_data[i*4 + 0] || 
+            raw_rgb[i*3 + 1] != rgba_data[i*4 + 1] || 
+            raw_rgb[i*3 + 2] != rgba_data[i*4 + 2]) {
+            fprintf(stderr, "Error: Data mismatch at pixel %d.\n", i);
+            cubelut_free_buffer(rgba16_data);
+            cubelut_free_buffer(rgba_data);
+            cubelut_free(lut);
+            return 1;
+        }
+    }
+    printf("  Data verification passed.\n");
+
     // Clean up
     cubelut_free_buffer(rgba16_data);
     cubelut_free_buffer(rgba_data);

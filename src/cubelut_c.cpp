@@ -164,6 +164,14 @@ uint16_t* cubelut_create_rgba16_buffer(const cubelut_lut_t* lut, size_t* out_byt
     return rgba16;
 }
 
+const float* cubelut_get_raw_rgb_data(const cubelut_lut_t* lut, size_t* out_num_floats) {
+    if (!lut) return nullptr;
+    if (out_num_floats) {
+        *out_num_floats = lut->inner.data.size();
+    }
+    return lut->inner.data.data();
+}
+
 void cubelut_free_buffer(void* buffer) {
     // Both float* and uint16_t* are allocated using new[]
     delete[] static_cast<char*>(buffer);
