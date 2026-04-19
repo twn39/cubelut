@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,9 +56,21 @@ const char* cubelut_get_title(const cubelut_lut_t* lut);
 float* cubelut_create_rgba_buffer(const cubelut_lut_t* lut, size_t* out_byte_size);
 
 /**
- * Frees a buffer previously returned by cubelut_create_rgba_buffer.
+ * Creates and returns a new buffer containing the LUT data formatted as RGBA float16 (half precision).
+ * The original RGB data is padded with Alpha = 1.0f (which is 0x3C00 in float16).
+ * This is the optimal format for mobile GPU textures (e.g., Metal MTLPixelFormatRGBA16Float),
+ * halving the memory bandwidth and footprint compared to float32.
+ * 
+ * @param lut The LUT object.
+ * @param out_byte_size A pointer to a size_t where the total size in bytes of the returned buffer will be written.
+ * @return A pointer to the newly allocated uint16_t array. The caller must free it using cubelut_free_buffer().
  */
-void cubelut_free_buffer(float* buffer);
+uint16_t* cubelut_create_rgba16_buffer(const cubelut_lut_t* lut, size_t* out_byte_size);
+
+/**
+ * Frees a buffer previously returned by cubelut_create_rgba_buffer or cubelut_create_rgba16_buffer.
+ */
+void cubelut_free_buffer(void* buffer);
 
 #ifdef __cplusplus
 }
