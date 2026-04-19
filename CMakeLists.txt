@@ -16,6 +16,14 @@ set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(highway)
 
+# Fetch fast_float for blazing fast parsing
+FetchContent_Declare(
+    fast_float
+    GIT_REPOSITORY https://github.com/fastfloat/fast_float.git
+    GIT_TAG v6.1.1
+)
+FetchContent_MakeAvailable(fast_float)
+
 # Library
 add_library(cubelut
     src/lut.cpp
@@ -32,7 +40,7 @@ target_include_directories(cubelut
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(cubelut PUBLIC hwy)
+target_link_libraries(cubelut PUBLIC hwy PRIVATE fast_float)
 
 # Examples
 add_executable(cubelut_example examples/basic_usage.cpp)
@@ -42,8 +50,19 @@ add_executable(apply_lut examples/apply_lut.cpp)
 target_include_directories(apply_lut PRIVATE vendor/stb)
 target_link_libraries(apply_lut PRIVATE cubelut)
 
-# Tests
-enable_testing()
+# Fetch Google Benchmark for performance testing
+FetchContent_Declare(
+    benchmark
+    GIT_REPOSITORY https://github.com/google/benchmark.git
+    GIT_TAG v1.8.3
+)
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(benchmark)
+
+# Benchmark Target
+add_executable(cubelut_benchmark tests/benchmark_processor.cpp)
+target_link_libraries(cubelut_benchmark PRIVATE cubelut benchmark::benchmark)
+
 add_executable(cubelut_test tests/test_processor.cpp)
 target_link_libraries(cubelut_test PRIVATE cubelut)
 add_test(NAME processor_test COMMAND cubelut_test)
