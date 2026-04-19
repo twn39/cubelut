@@ -87,14 +87,24 @@ void cubelut_free(cubelut_lut_t* lut) {
     delete lut;
 }
 
-bool cubelut_is_3d(const cubelut_lut_t* lut) {
+bool cubelut_has_shaper1d(const cubelut_lut_t* lut) {
     if (!lut) return false;
-    return lut->inner.type == cubelut::LutType::Lut3D;
+    return lut->inner.shaper1D.has_value() && lut->inner.shaper1D->isValid();
 }
 
-int cubelut_get_size(const cubelut_lut_t* lut) {
-    if (!lut) return 0;
-    return lut->inner.size;
+bool cubelut_has_grid3d(const cubelut_lut_t* lut) {
+    if (!lut) return false;
+    return lut->inner.grid3D.has_value() && lut->inner.grid3D->isValid();
+}
+
+int cubelut_get_shaper1d_size(const cubelut_lut_t* lut) {
+    if (!lut || !cubelut_has_shaper1d(lut)) return 0;
+    return lut->inner.shaper1D->size;
+}
+
+int cubelut_get_grid3d_size(const cubelut_lut_t* lut) {
+    if (!lut || !cubelut_has_grid3d(lut)) return 0;
+    return lut->inner.grid3D->size;
 }
 
 const char* cubelut_get_title(const cubelut_lut_t* lut) {
@@ -102,26 +112,18 @@ const char* cubelut_get_title(const cubelut_lut_t* lut) {
     return lut->inner.title.c_str();
 }
 
-float* cubelut_create_rgba_buffer(const cubelut_lut_t* lut, size_t* out_byte_size) {
-    if (!lut || !out_byte_size) return nullptr;
+float* cubelut_create_rgba_buffer_for_grid3d(const cubelut_lut_t* lut, size_t* out_byte_size) {
+    if (!lut || !out_byte_size || !cubelut_has_grid3d(lut)) return nullptr;
     
-    int size = lut->inner.size;
-    size_t num_pixels = 0;
-    
-    if (lut->inner.type == cubelut::LutType::Lut1D) {
-        num_pixels = static_cast<size_t>(size);
-    } else {
-        num_pixels = static_cast<size_t>(size) * size * size;
-    }
+    int size = lut->inner.grid3D->size;
+    size_t num_pixels = static_cast<size_t>(size) * size * size;
     
     // 4 floats per pixel (RGBA)
     *out_byte_size = num_pixels * 4 * sizeof(float);
     float* rgba = new float[num_pixels * 4];
     
-    const float* rgb = lut->inner.data.data();
+    const float* rgb = lut->inner.grid3D->data.data();
     
-    // Convert tight RGB array to RGBA padded to 1.0f.
-    // Sequential iteration is very fast due to hardware memory prefetchers.
     for (size_t i = 0; i < num_pixels; ++i) {
         rgba[i * 4 + 0] = rgb[i * 3 + 0]; // R
         rgba[i * 4 + 1] = rgb[i * 3 + 1]; // G
@@ -132,28 +134,18 @@ float* cubelut_create_rgba_buffer(const cubelut_lut_t* lut, size_t* out_byte_siz
     return rgba;
 }
 
-uint16_t* cubelut_create_rgba16_buffer(const cubelut_lut_t* lut, size_t* out_byte_size) {
-    if (!lut || !out_byte_size) return nullptr;
+uint16_t* cubelut_create_rgba16_buffer_for_grid3d(const cubelut_lut_t* lut, size_t* out_byte_size) {
+    if (!lut || !out_byte_size || !cubelut_has_grid3d(lut)) return nullptr;
     
-    int size = lut->inner.size;
-    size_t num_pixels = 0;
+    int size = lut->inner.grid3D->size;
+    size_t num_pixels = static_cast<size_t>(size) * size * size;
     
-    if (lut->inner.type == cubelut::LutType::Lut1D) {
-        num_pixels = static_cast<size_t>(size);
-    } else {
-        num_pixels = static_cast<size_t>(size) * size * size;
-    }
-    
-    // 4 half-floats (uint16_t) per pixel
     *out_byte_size = num_pixels * 4 * sizeof(uint16_t);
     uint16_t* rgba16 = new uint16_t[num_pixels * 4];
     
-    const float* rgb32 = lut->inner.data.data();
-    
-    // 1.0f in IEEE-754 half-precision
+    const float* rgb32 = lut->inner.grid3D->data.data();
     const uint16_t alpha_1_fp16 = 0x3C00;
     
-    // Convert tight RGB array to RGBA16 padded to 1.0h.
     for (size_t i = 0; i < num_pixels; ++i) {
         rgba16[i * 4 + 0] = float_to_half(rgb32[i * 3 + 0]); // R
         rgba16[i * 4 + 1] = float_to_half(rgb32[i * 3 + 1]); // G
@@ -164,12 +156,20 @@ uint16_t* cubelut_create_rgba16_buffer(const cubelut_lut_t* lut, size_t* out_byt
     return rgba16;
 }
 
-const float* cubelut_get_raw_rgb_data(const cubelut_lut_t* lut, size_t* out_num_floats) {
-    if (!lut) return nullptr;
+const float* cubelut_get_raw_rgb_data_for_grid3d(const cubelut_lut_t* lut, size_t* out_num_floats) {
+    if (!lut || !cubelut_has_grid3d(lut)) return nullptr;
     if (out_num_floats) {
-        *out_num_floats = lut->inner.data.size();
+        *out_num_floats = lut->inner.grid3D->data.size();
     }
-    return lut->inner.data.data();
+    return lut->inner.grid3D->data.data();
+}
+
+const float* cubelut_get_raw_rgb_data_for_shaper1d(const cubelut_lut_t* lut, size_t* out_num_floats) {
+    if (!lut || !cubelut_has_shaper1d(lut)) return nullptr;
+    if (out_num_floats) {
+        *out_num_floats = lut->inner.shaper1D->data.size();
+    }
+    return lut->inner.shaper1D->data.data();
 }
 
 void cubelut_free_buffer(void* buffer) {

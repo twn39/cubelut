@@ -29,14 +29,24 @@ cubelut_lut_t* cubelut_load_from_string(const char* content);
 void cubelut_free(cubelut_lut_t* lut);
 
 /**
- * Returns true if the LUT is 3D, false if 1D.
+ * Returns true if the LUT pipeline contains a 1D shaper LUT.
  */
-bool cubelut_is_3d(const cubelut_lut_t* lut);
+bool cubelut_has_shaper1d(const cubelut_lut_t* lut);
 
 /**
- * Returns the size of the LUT grid (e.g., 33 for a 33x33x33 3D LUT, or 4096 for a 1D LUT).
+ * Returns true if the LUT pipeline contains a 3D grid LUT.
  */
-int cubelut_get_size(const cubelut_lut_t* lut);
+bool cubelut_has_grid3d(const cubelut_lut_t* lut);
+
+/**
+ * Returns the size of the 1D shaper LUT (0 if not present).
+ */
+int cubelut_get_shaper1d_size(const cubelut_lut_t* lut);
+
+/**
+ * Returns the size of the 3D grid LUT (0 if not present, e.g., 33 for 33x33x33).
+ */
+int cubelut_get_grid3d_size(const cubelut_lut_t* lut);
 
 /**
  * Gets the title of the LUT. The returned pointer is owned by the LUT object and
@@ -45,41 +55,41 @@ int cubelut_get_size(const cubelut_lut_t* lut);
 const char* cubelut_get_title(const cubelut_lut_t* lut);
 
 /**
- * Creates and returns a new buffer containing the LUT data formatted as RGBA float32.
+ * Creates and returns a new buffer containing the 3D LUT data formatted as RGBA float32.
  * The original RGB data is padded with Alpha = 1.0f.
- * This format is ideal for direct upload to GPU textures (e.g., Metal MTLTexture, CoreImage).
  * 
  * @param lut The LUT object.
- * @param out_byte_size A pointer to a size_t where the total size in bytes of the returned buffer will be written.
- * @return A pointer to the newly allocated float array. The caller must free it using cubelut_free_buffer().
+ * @param out_byte_size Returns the total size in bytes of the returned buffer.
+ * @return A pointer to the newly allocated float array. Caller must free using cubelut_free_buffer().
  */
-float* cubelut_create_rgba_buffer(const cubelut_lut_t* lut, size_t* out_byte_size);
+float* cubelut_create_rgba_buffer_for_grid3d(const cubelut_lut_t* lut, size_t* out_byte_size);
 
 /**
- * Creates and returns a new buffer containing the LUT data formatted as RGBA float16 (half precision).
- * The original RGB data is padded with Alpha = 1.0f (which is 0x3C00 in float16).
- * This is the optimal format for mobile GPU textures (e.g., Metal MTLPixelFormatRGBA16Float),
- * halving the memory bandwidth and footprint compared to float32.
+ * Creates and returns a new buffer containing the 3D LUT data formatted as RGBA float16 (half precision).
  * 
  * @param lut The LUT object.
- * @param out_byte_size A pointer to a size_t where the total size in bytes of the returned buffer will be written.
- * @return A pointer to the newly allocated uint16_t array. The caller must free it using cubelut_free_buffer().
+ * @param out_byte_size Returns the total size in bytes of the returned buffer.
+ * @return A pointer to the newly allocated uint16_t array. Caller must free using cubelut_free_buffer().
  */
-uint16_t* cubelut_create_rgba16_buffer(const cubelut_lut_t* lut, size_t* out_byte_size);
+uint16_t* cubelut_create_rgba16_buffer_for_grid3d(const cubelut_lut_t* lut, size_t* out_byte_size);
 
 /**
- * Gets a direct, zero-copy pointer to the internal RGB floating-point data.
- * The layout is tightly packed RGB (e.g., R, G, B, R, G, B...).
- * 
- * WARNING: The returned pointer is owned by the LUT object. It becomes invalid
- * as soon as `cubelut_free(lut)` is called. Do NOT free this pointer.
+ * Gets a direct, zero-copy pointer to the internal RGB floating-point data for the 3D Grid.
  * 
  * @param lut The LUT object.
- * @param out_num_floats Returns the total number of floats (size * size * size * 3 for 3D LUTs).
- *                       If NULL is passed, this parameter is ignored.
+ * @param out_num_floats Returns the total number of floats.
  * @return A constant pointer to the internal float array.
  */
-const float* cubelut_get_raw_rgb_data(const cubelut_lut_t* lut, size_t* out_num_floats);
+const float* cubelut_get_raw_rgb_data_for_grid3d(const cubelut_lut_t* lut, size_t* out_num_floats);
+
+/**
+ * Gets a direct, zero-copy pointer to the internal RGB floating-point data for the 1D Shaper.
+ * 
+ * @param lut The LUT object.
+ * @param out_num_floats Returns the total number of floats.
+ * @return A constant pointer to the internal float array.
+ */
+const float* cubelut_get_raw_rgb_data_for_shaper1d(const cubelut_lut_t* lut, size_t* out_num_floats);
 
 /**
  * Frees a buffer previously returned by cubelut_create_rgba_buffer or cubelut_create_rgba16_buffer.

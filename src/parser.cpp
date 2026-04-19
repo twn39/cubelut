@@ -29,7 +29,12 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
     const char* p = content.data();
     const char* end = p + content.size();
     
-    bool sizeDefined = false;
+    Domain current_domain;
+    
+    int expected_1d_items = 0;
+    int expected_3d_items = 0;
+    int read_1d_items = 0;
+    int read_3d_items = 0;
 
     auto skip_whitespace = [&]() {
         while (p < end && (*p == ' ' || *p == '\t' || *p == '\r')) {
@@ -67,13 +72,6 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
 
         // Data section usually starts with a number, minus, or dot
         if (*p == '-' || *p == '+' || *p == '.' || (*p >= '0' && *p <= '9')) {
-            if (sizeDefined && lut.data.capacity() == 0) {
-                size_t expectedSize = (lut.type == LutType::Lut1D) 
-                                      ? lut.size 
-                                      : static_cast<size_t>(lut.size) * lut.size * lut.size;
-                lut.data.reserve(expectedSize * 3);
-            }
-
             float r, g, b;
             auto resR = fast_float::from_chars(p, end, r);
             p = resR.ptr; skip_whitespace();
@@ -85,9 +83,17 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
             p = resB.ptr;
 
             if (resR.ec == std::errc() && resG.ec == std::errc() && resB.ec == std::errc()) {
-                lut.data.push_back(r);
-                lut.data.push_back(g);
-                lut.data.push_back(b);
+                if (lut.shaper1D.has_value() && read_1d_items < expected_1d_items) {
+                    lut.shaper1D->data.push_back(r);
+                    lut.shaper1D->data.push_back(g);
+                    lut.shaper1D->data.push_back(b);
+                    read_1d_items += 3;
+                } else if (lut.grid3D.has_value() && read_3d_items < expected_3d_items) {
+                    lut.grid3D->data.push_back(r);
+                    lut.grid3D->data.push_back(g);
+                    lut.grid3D->data.push_back(b);
+                    read_3d_items += 3;
+                }
             }
             skip_line();
             continue;
@@ -110,9 +116,14 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
             int size;
             auto res = fast_float::from_chars(p, end, size);
             if (res.ec == std::errc()) {
-                lut.type = LutType::Lut1D;
-                lut.size = size;
-                sizeDefined = true;
+                LutData1D d1;
+                d1.size = size;
+                d1.domain = current_domain;
+                expected_1d_items = size * 3;
+                d1.data.reserve(expected_1d_items);
+                lut.shaper1D = std::move(d1);
+                
+                current_domain = Domain{}; // reset domain
                 p = res.ptr;
             }
             skip_line();
@@ -124,9 +135,14 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
             int size;
             auto res = fast_float::from_chars(p, end, size);
             if (res.ec == std::errc()) {
-                lut.type = LutType::Lut3D;
-                lut.size = size;
-                sizeDefined = true;
+                LutData3D d3;
+                d3.size = size;
+                d3.domain = current_domain;
+                expected_3d_items = size * size * size * 3;
+                d3.data.reserve(expected_3d_items);
+                lut.grid3D = std::move(d3);
+                
+                current_domain = Domain{}; // reset domain
                 p = res.ptr;
             }
             skip_line();
@@ -136,7 +152,7 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
         if (match_prefix("DOMAIN_MIN ", 11)) {
             skip_whitespace();
             for (int i = 0; i < 3; ++i) {
-                auto res = fast_float::from_chars(p, end, lut.domainMin[i]);
+                auto res = fast_float::from_chars(p, end, current_domain.min[i]);
                 p = res.ptr;
                 skip_whitespace();
             }
@@ -147,7 +163,7 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
         if (match_prefix("DOMAIN_MAX ", 11)) {
             skip_whitespace();
             for (int i = 0; i < 3; ++i) {
-                auto res = fast_float::from_chars(p, end, lut.domainMax[i]);
+                auto res = fast_float::from_chars(p, end, current_domain.max[i]);
                 p = res.ptr;
                 skip_whitespace();
             }
@@ -159,7 +175,7 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
         skip_line();
     }
 
-    if (!sizeDefined || !lut.isValid()) {
+    if (!lut.isValid()) {
         return std::nullopt;
     }
     

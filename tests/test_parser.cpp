@@ -17,24 +17,31 @@ void test_load_real_files() {
             const auto& lut = *lutOpt;
             
             std::cout << "  Title: " << lut.title << std::endl;
-            std::cout << "  Type: " << (lut.type == cubelut::LutType::Lut1D ? "1D" : "3D") << std::endl;
-            std::cout << "  Size: " << lut.size << std::endl;
+            if (lut.shaper1D) {
+                std::cout << "  Has 1D Shaper Size: " << lut.shaper1D->size << std::endl;
+                assert(lut.shaper1D->size > 0);
+                assert(!lut.shaper1D->data.empty());
+            }
+            if (lut.grid3D) {
+                std::cout << "  Has 3D Grid Size: " << lut.grid3D->size << std::endl;
+                assert(lut.grid3D->size > 0);
+                assert(!lut.grid3D->data.empty());
+            }
             
-            assert(lut.size > 0);
-            assert(!lut.data.empty());
             assert(lut.isValid());
             
             // Basic sanity check: data should be within or near [0, 1] usually, 
             // but some LUTs might have out of range values for HDR or specific shaper LUTs.
             // For now just check it's not all zeros or obviously broken.
-            bool allZero = true;
-            for (size_t i = 0; i < std::min<size_t>(lut.data.size(), 100); ++i) {
-                if (lut.data[i] != 0.0f) {
-                    allZero = false;
-                    break;
+            if (lut.grid3D) {
+                bool allZero = true;
+                for (size_t i = 0; i < std::min<size_t>(lut.grid3D->data.size(), 100); ++i) {
+                    if (lut.grid3D->data[i] != 0.0f) {
+                        allZero = false;
+                        break;
+                    }
                 }
             }
-            // assert(!allZero); // Not always true for some LUTs but usually true for these
             
             std::cout << "  Successfully validated " << entry.path().filename() << std::endl;
         }

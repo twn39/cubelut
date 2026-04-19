@@ -13,14 +13,16 @@ int main(int argc, char** argv) {
     if (lutOpt) {
         const auto& lut = *lutOpt;
         std::cout << "Successfully parsed LUT: " << lut.title << std::endl;
-        std::cout << "Type: " << (lut.type == cubelut::LutType::Lut1D ? "1D" : "3D") << std::endl;
-        std::cout << "Size: " << lut.size << std::endl;
-        std::cout << "Data points: " << lut.data.size() / 3 << std::endl;
-        
-        if (lut.data.size() >= 3) {
-            std::cout << "First point: (" << lut.data[0] << ", " << lut.data[1] << ", " << lut.data[2] << ")" << std::endl;
-        }
-    } else {
+        std::cout << "Has 1D Shaper: " << (lut.shaper1D ? "Yes" : "No") << std::endl;
+        std::cout << "Has 3D Grid: " << (lut.grid3D ? "Yes" : "No") << std::endl;
+
+        if (lut.grid3D) {
+            std::cout << "3D Grid Size: " << lut.grid3D->size << std::endl;
+            std::cout << "3D Data points: " << lut.grid3D->data.size() / 3 << std::endl;
+            if (lut.grid3D->data.size() >= 3) {
+                std::cout << "First point: (" << lut.grid3D->data[0] << ", " << lut.grid3D->data[1] << ", " << lut.grid3D->data[2] << ")" << std::endl;
+            }
+        }    } else {
         std::cerr << "Failed to parse LUT from " << filePath << std::endl;
     }
 

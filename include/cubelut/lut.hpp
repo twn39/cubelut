@@ -3,40 +3,45 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <optional>
 
 namespace cubelut {
 
-enum class LutType {
-    Lut1D,
-    Lut3D
+struct Domain {
+    std::array<float, 3> min = {0.0f, 0.0f, 0.0f};
+    std::array<float, 3> max = {1.0f, 1.0f, 1.0f};
 };
 
-struct Lut {
-    LutType type = LutType::Lut3D;
-    std::string title;
-    
-    // Domain limits (often [0, 1])
-    std::array<float, 3> domainMin = {0.0f, 0.0f, 0.0f};
-    std::array<float, 3> domainMax = {1.0f, 1.0f, 1.0f};
-    
-    // Size: 1D size or 3D dimension (e.g. 33 means 33x33x33)
-    // Adobe .cube format typically uses cubic 3D LUTs (size x size x size)
-    int size = 0; 
-    
-    // Data in RGB format
-    // For 1D LUT: size * 3 floats
-    // For 3D LUT: size * size * size * 3 floats
+struct LutData1D {
+    int size = 0;
+    Domain domain;
     std::vector<float> data;
 
     bool isValid() const {
-        if (size <= 0) return false;
-        size_t expectedSize = 0;
-        if (type == LutType::Lut1D) {
-            expectedSize = static_cast<size_t>(size) * 3;
-        } else {
-            expectedSize = static_cast<size_t>(size) * size * size * 3;
-        }
-        return data.size() == expectedSize;
+        return size > 0 && data.size() == static_cast<size_t>(size * 3);
+    }
+};
+
+struct LutData3D {
+    int size = 0;
+    Domain domain;
+    std::vector<float> data;
+
+    bool isValid() const {
+        return size > 0 && data.size() == static_cast<size_t>(size * size * size * 3);
+    }
+};
+
+struct Lut {
+    std::string title;
+    
+    std::optional<LutData1D> shaper1D;
+    std::optional<LutData3D> grid3D;
+
+    bool isValid() const {
+        bool valid1D = shaper1D.has_value() && shaper1D->isValid();
+        bool valid3D = grid3D.has_value() && grid3D->isValid();
+        return valid1D || valid3D;
     }
 };
 

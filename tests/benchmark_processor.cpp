@@ -112,7 +112,7 @@ static void BM_C_API_Export_RGBA32(benchmark::State& state) {
     size_t byte_size = 0;
     
     for (auto _ : state) {
-        float* buf = cubelut_create_rgba_buffer(cached_c_lut, &byte_size);
+        float* buf = cubelut_create_rgba_buffer_for_grid3d(cached_c_lut, &byte_size);
         benchmark::DoNotOptimize(buf);
         cubelut_free_buffer(buf);
     }
@@ -124,7 +124,7 @@ static void BM_C_API_Export_RGBA16(benchmark::State& state) {
     size_t byte_size = 0;
     
     for (auto _ : state) {
-        uint16_t* buf = cubelut_create_rgba16_buffer(cached_c_lut, &byte_size);
+        uint16_t* buf = cubelut_create_rgba16_buffer_for_grid3d(cached_c_lut, &byte_size);
         benchmark::DoNotOptimize(buf);
         cubelut_free_buffer(buf);
     }

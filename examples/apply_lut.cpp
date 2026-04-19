@@ -27,7 +27,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     const auto& lut = *lutOpt;
-    std::cout << "Loaded LUT: " << lutPath << " (Size: " << lut.size << ")" << std::endl;
+    int size = lut.grid3D ? lut.grid3D->size : (lut.shaper1D ? lut.shaper1D->size : 0);
+    std::cout << "Loaded LUT: " << lutPath << " (Size: " << size << ")" << std::endl;
 
     // Load Image
     int width, height, channels;

@@ -19,9 +19,9 @@ public:
     static void processImage(const Lut& lut, float* data, size_t width, size_t height, Interpolation interp = Interpolation::Tetrahedral);
 
 private:
-    static std::array<float, 3> process1D(const Lut& lut, const std::array<float, 3>& pixel);
-    static std::array<float, 3> process3DTrilinear(const Lut& lut, const std::array<float, 3>& pixel);
-    static std::array<float, 3> process3DTetrahedral(const Lut& lut, const std::array<float, 3>& pixel);
+    static std::array<float, 3> process1D(const LutData1D& lut, const std::array<float, 3>& pixel);
+    static std::array<float, 3> process3DTrilinear(const LutData3D& lut, const std::array<float, 3>& pixel);
+    static std::array<float, 3> process3DTetrahedral(const LutData3D& lut, const std::array<float, 3>& pixel);
 };
 
 } // namespace cubelut

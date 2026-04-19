@@ -18,20 +18,22 @@ int main(int argc, char** argv) {
     printf("LUT loaded successfully!\n");
     printf("Title: %s\n", cubelut_get_title(lut));
     
-    bool is_3d = cubelut_is_3d(lut);
-    printf("Type: %s\n", is_3d ? "3D" : "1D");
+    bool has_1d = cubelut_has_shaper1d(lut);
+    bool has_3d = cubelut_has_grid3d(lut);
+    printf("Has 1D Shaper: %s\n", has_1d ? "Yes" : "No");
+    printf("Has 3D Grid: %s\n", has_3d ? "Yes" : "No");
     
-    int size = cubelut_get_size(lut);
-    printf("Size: %d\n", size);
+    int size = cubelut_get_grid3d_size(lut);
+    printf("3D Grid Size: %d\n", size);
 
-    if (size != 33 || !is_3d) {
+    if (size != 33 || !has_3d) {
         fprintf(stderr, "Error: Unexpected LUT properties.\n");
         cubelut_free(lut);
         return 1;
     }
 
     size_t rgba_byte_size = 0;
-    float* rgba_data = cubelut_create_rgba_buffer(lut, &rgba_byte_size);
+    float* rgba_data = cubelut_create_rgba_buffer_for_grid3d(lut, &rgba_byte_size);
 
     if (!rgba_data) {
         fprintf(stderr, "Error: Failed to create RGBA buffer.\n");
@@ -87,7 +89,7 @@ int main(int argc, char** argv) {
     // --- Test Float16 Buffer Generation ---
     printf("\nGenerating RGBA16 (Float16) Buffer:\n");
     size_t rgba16_byte_size = 0;
-    uint16_t* rgba16_data = cubelut_create_rgba16_buffer(lut, &rgba16_byte_size);
+    uint16_t* rgba16_data = cubelut_create_rgba16_buffer_for_grid3d(lut, &rgba16_byte_size);
 
     if (!rgba16_data) {
         fprintf(stderr, "Error: Failed to create RGBA16 buffer.\n");
@@ -140,7 +142,7 @@ int main(int argc, char** argv) {
     // --- Test Raw Zero-Copy Pointer Generation ---
     printf("\nTesting Raw Zero-Copy RGB Pointer:\n");
     size_t num_raw_floats = 0;
-    const float* raw_rgb = cubelut_get_raw_rgb_data(lut, &num_raw_floats);
+    const float* raw_rgb = cubelut_get_raw_rgb_data_for_grid3d(lut, &num_raw_floats);
 
     if (!raw_rgb) {
         fprintf(stderr, "Error: Failed to get raw RGB pointer.\n");
