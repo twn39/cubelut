@@ -67,6 +67,10 @@ add_executable(cubelut_test tests/test_processor.cpp)
 target_link_libraries(cubelut_test PRIVATE cubelut)
 add_test(NAME processor_test COMMAND cubelut_test)
 
+add_executable(cubelut_parser_test tests/test_parser.cpp)
+target_link_libraries(cubelut_parser_test PRIVATE cubelut)
+add_test(NAME parser_test COMMAND cubelut_parser_test)
+
 add_executable(cubelut_c_api_test tests/test_c_api.c)
 target_link_libraries(cubelut_c_api_test PRIVATE cubelut)
 add_test(NAME c_api_test COMMAND cubelut_c_api_test)

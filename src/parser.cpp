@@ -57,6 +57,10 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
         return false;
     };
 
+    // Hard limits to prevent malicious OOM (Out-of-Memory) attacks
+    constexpr int MAX_1D_SIZE = 65536;
+    constexpr int MAX_3D_SIZE = 256;
+
     while (p < end) {
         skip_whitespace();
         if (p == end) break;
@@ -73,28 +77,31 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
         // Data section usually starts with a number, minus, or dot
         if (*p == '-' || *p == '+' || *p == '.' || (*p >= '0' && *p <= '9')) {
             float r, g, b;
+            
             auto resR = fast_float::from_chars(p, end, r);
+            if (resR.ec != std::errc()) { skip_line(); continue; }
             p = resR.ptr; skip_whitespace();
             
             auto resG = fast_float::from_chars(p, end, g);
+            if (resG.ec != std::errc()) { skip_line(); continue; }
             p = resG.ptr; skip_whitespace();
             
             auto resB = fast_float::from_chars(p, end, b);
+            if (resB.ec != std::errc()) { skip_line(); continue; }
             p = resB.ptr;
 
-            if (resR.ec == std::errc() && resG.ec == std::errc() && resB.ec == std::errc()) {
-                if (lut.shaper1D.has_value() && read_1d_items < expected_1d_items) {
-                    lut.shaper1D->data.push_back(r);
-                    lut.shaper1D->data.push_back(g);
-                    lut.shaper1D->data.push_back(b);
-                    read_1d_items += 3;
-                } else if (lut.grid3D.has_value() && read_3d_items < expected_3d_items) {
-                    lut.grid3D->data.push_back(r);
-                    lut.grid3D->data.push_back(g);
-                    lut.grid3D->data.push_back(b);
-                    read_3d_items += 3;
-                }
+            if (lut.shaper1D.has_value() && read_1d_items < expected_1d_items) {
+                lut.shaper1D->data.push_back(r);
+                lut.shaper1D->data.push_back(g);
+                lut.shaper1D->data.push_back(b);
+                read_1d_items += 3;
+            } else if (lut.grid3D.has_value() && read_3d_items < expected_3d_items) {
+                lut.grid3D->data.push_back(r);
+                lut.grid3D->data.push_back(g);
+                lut.grid3D->data.push_back(b);
+                read_3d_items += 3;
             }
+            
             skip_line();
             continue;
         }
@@ -115,7 +122,7 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
             skip_whitespace();
             int size;
             auto res = fast_float::from_chars(p, end, size);
-            if (res.ec == std::errc()) {
+            if (res.ec == std::errc() && size > 0 && size <= MAX_1D_SIZE) {
                 LutData1D d1;
                 d1.size = size;
                 d1.domain = current_domain;
@@ -125,6 +132,8 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
                 
                 current_domain = Domain{}; // reset domain
                 p = res.ptr;
+            } else {
+                return std::nullopt; // Malformed or malicious size
             }
             skip_line();
             continue;
@@ -134,7 +143,7 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
             skip_whitespace();
             int size;
             auto res = fast_float::from_chars(p, end, size);
-            if (res.ec == std::errc()) {
+            if (res.ec == std::errc() && size > 0 && size <= MAX_3D_SIZE) {
                 LutData3D d3;
                 d3.size = size;
                 d3.domain = current_domain;
@@ -144,6 +153,8 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
                 
                 current_domain = Domain{}; // reset domain
                 p = res.ptr;
+            } else {
+                return std::nullopt; // Malformed or malicious size
             }
             skip_line();
             continue;
