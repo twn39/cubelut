@@ -1,0 +1,27 @@
+#pragma once
+
+#include <array>
+#include "lut.hpp"
+
+namespace cubelut {
+
+enum class Interpolation {
+    Trilinear,
+    Tetrahedral
+};
+
+class Processor {
+public:
+    // Apply LUT to a single pixel (RGB in range [0, 1])
+    static std::array<float, 3> process(const Lut& lut, const std::array<float, 3>& pixel, Interpolation interp = Interpolation::Tetrahedral);
+
+    // Apply LUT to an entire image in-place (RGB format, floats)
+    static void processImage(const Lut& lut, float* data, size_t width, size_t height, Interpolation interp = Interpolation::Tetrahedral);
+
+private:
+    static std::array<float, 3> process1D(const Lut& lut, const std::array<float, 3>& pixel);
+    static std::array<float, 3> process3DTrilinear(const Lut& lut, const std::array<float, 3>& pixel);
+    static std::array<float, 3> process3DTetrahedral(const Lut& lut, const std::array<float, 3>& pixel);
+};
+
+} // namespace cubelut
