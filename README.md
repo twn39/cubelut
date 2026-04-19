@@ -46,12 +46,3 @@ auto result = cubelut::Processor::process(lut, pixel);
 // Assuming float* imageData points to RGB data
 cubelut::Processor::processImage(lut, imageData, width, height);
 ```
-
-## Acknowledgements
-
-Reference implementations:
-- `smol-cube`
-- `OpenColorIO`
-- `GPUImage3`
-- `MetalPetal`
-- `SwiftCube`
