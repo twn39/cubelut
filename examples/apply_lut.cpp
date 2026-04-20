@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <thread>
 
 int main(int argc, char** argv) {
     if (argc < 4) {
@@ -46,9 +47,30 @@ int main(int argc, char** argv) {
         imgFloat[i] = img[i] / 255.0f;
     }
 
-    // Apply LUT
-    std::cout << "Applying LUT..." << std::endl;
-    cubelut::Processor::processImage(lut, imgFloat.data(), width, height);
+    // Apply LUT (Multi-threaded Chunking)
+    std::cout << "Applying LUT using multi-threaded chunking..." << std::endl;
+    
+    unsigned int num_threads = std::thread::hardware_concurrency();
+    if (num_threads == 0) num_threads = 4;
+    
+    std::cout << "  Spawning " << num_threads << " worker threads..." << std::endl;
+    
+    std::vector<std::thread> threads;
+    size_t total_pixels = width * height;
+    size_t chunk_size = total_pixels / num_threads;
+    
+    for (unsigned int t = 0; t < num_threads; ++t) {
+        size_t start_idx = t * chunk_size;
+        size_t end_idx = (t == num_threads - 1) ? total_pixels : start_idx + chunk_size;
+        
+        threads.emplace_back([&lut, &imgFloat, start_idx, end_idx]() {
+            cubelut::Processor::processPixels(lut, imgFloat.data(), start_idx, end_idx);
+        });
+    }
+    
+    for (auto& th : threads) {
+        th.join();
+    }
 
     // Convert back to unsigned char
     std::vector<unsigned char> imgOut(width * height * 3);
