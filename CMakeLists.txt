@@ -5,6 +5,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+
+if(ENABLE_ASAN)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=address")
+endif()
+
 # Fetch Google Highway for SIMD optimizations
 include(FetchContent)
 FetchContent_Declare(
@@ -62,7 +71,8 @@ FetchContent_MakeAvailable(benchmark)
 # Benchmark Target
 add_executable(cubelut_benchmark tests/benchmark_processor.cpp)
 target_link_libraries(cubelut_benchmark PRIVATE cubelut benchmark::benchmark)
-
+# Tests
+enable_testing()
 add_executable(cubelut_test tests/test_processor.cpp)
 target_link_libraries(cubelut_test PRIVATE cubelut)
 add_test(NAME processor_test COMMAND cubelut_test)
