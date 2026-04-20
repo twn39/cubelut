@@ -177,6 +177,36 @@ int main(int argc, char** argv) {
         }
     }
     printf("  Data verification passed.\n");
+    
+    // --- Test process chunk ---
+    printf("\nTesting Process Image Chunk (Multi-threading readiness)...\n");
+    float* dummy_img = (float*)malloc(4 * 3 * sizeof(float)); // 4 pixels
+    for(int i=0; i<12; i++) dummy_img[i] = 0.5f;
+    
+    // Process only the middle 2 pixels (index 1 and 2)
+    cubelut_process_image_chunk(lut, dummy_img, 1, 3, true);
+    
+    // Pixel 0 and 3 should be untouched
+    if (dummy_img[0] != 0.5f || dummy_img[9] != 0.5f) {
+        fprintf(stderr, "Error: Chunk processing leaked into unrequested pixels.\n");
+        free(dummy_img);
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+    
+    // Pixel 1 and 2 should be modified (not 0.5f anymore)
+    if (dummy_img[3] == 0.5f || dummy_img[6] == 0.5f) {
+        fprintf(stderr, "Error: Chunk processing failed to modify requested pixels.\n");
+        free(dummy_img);
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+    free(dummy_img);
+    printf("  Chunk verification passed.\n");
 
     // Clean up
     cubelut_free_buffer(rgba16_data);

@@ -96,6 +96,27 @@ const float* cubelut_get_raw_rgb_data_for_shaper1d(const cubelut_lut_t* lut, siz
  */
 void cubelut_free_buffer(void* buffer);
 
+/**
+ * Processes a specific chunk of the image in-place. 
+ * This is designed for multi-threading (Thread-Level Parallelism).
+ * The host application can split the image into N chunks and submit them to its own thread pool.
+ * 
+ * @param lut The LUT object pipeline.
+ * @param image_rgb_data A flat array of tightly-packed RGB floats (0.0 to 1.0).
+ *                       It must contain at least (end_pixel_idx * 3) elements.
+ * @param start_pixel_idx The starting pixel index (inclusive).
+ * @param end_pixel_idx The ending pixel index (exclusive).
+ * @param use_tetrahedral Set to true to use Tetrahedral interpolation (higher quality), 
+ *                        false for Trilinear.
+ */
+void cubelut_process_image_chunk(
+    const cubelut_lut_t* lut, 
+    float* image_rgb_data, 
+    size_t start_pixel_idx, 
+    size_t end_pixel_idx,
+    bool use_tetrahedral
+);
+
 #ifdef __cplusplus
 }
 #endif

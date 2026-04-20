@@ -1,5 +1,6 @@
 #include "cubelut/cubelut_c.h"
 #include "cubelut/parser.hpp"
+#include "cubelut/processor.hpp"
 #include "cubelut/lut.hpp"
 #include <cstring>
 #include <optional>
@@ -175,6 +176,19 @@ const float* cubelut_get_raw_rgb_data_for_shaper1d(const cubelut_lut_t* lut, siz
 void cubelut_free_buffer(void* buffer) {
     // Both float* and uint16_t* are allocated using new[]
     delete[] static_cast<char*>(buffer);
+}
+
+void cubelut_process_image_chunk(
+    const cubelut_lut_t* lut, 
+    float* image_rgb_data, 
+    size_t start_pixel_idx, 
+    size_t end_pixel_idx,
+    bool use_tetrahedral
+) {
+    if (!lut || !image_rgb_data) return;
+    
+    cubelut::Interpolation interp = use_tetrahedral ? cubelut::Interpolation::Tetrahedral : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processPixels(lut->inner, image_rgb_data, start_pixel_idx, end_pixel_idx, interp);
 }
 
 } // extern "C"

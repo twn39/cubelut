@@ -16,7 +16,7 @@ namespace hn = hwy::HWY_NAMESPACE;
 // -------------------------------------------------------------
 // 1. Trilinear SIMD Impl
 // -------------------------------------------------------------
-size_t ProcessImage3DSIMD_Trilinear_Bulk(const LutData3D& lut, float* data, size_t numPixels) {
+size_t ProcessPixels3DSIMD_Trilinear_Bulk(const LutData3D& lut, float* data, size_t startPixel, size_t endPixel) {
     const hn::ScalableTag<float> df;
     const hn::ScalableTag<int32_t> di;
     const size_t N = hn::Lanes(df);
@@ -38,8 +38,8 @@ size_t ProcessImage3DSIMD_Trilinear_Bulk(const LutData3D& lut, float* data, size
     int lut_size = lut.size, lut_size2 = lut.size * lut.size;
     const float* lut_data = lut.data.data();
 
-    size_t i = 0;
-    for (; i + N <= numPixels; i += N) {
+    size_t i = startPixel;
+    for (; i + N <= endPixel; i += N) {
         hn::Vec<decltype(df)> r, g, b;
         hn::LoadInterleaved3(df, data + i * 3, r, g, b);
 
@@ -95,7 +95,7 @@ size_t ProcessImage3DSIMD_Trilinear_Bulk(const LutData3D& lut, float* data, size
 // -------------------------------------------------------------
 // 2. Tetrahedral SIMD Impl (Branchless)
 // -------------------------------------------------------------
-size_t ProcessImage3DSIMD_Tetrahedral_Bulk(const LutData3D& lut, float* data, size_t numPixels) {
+size_t ProcessPixels3DSIMD_Tetrahedral_Bulk(const LutData3D& lut, float* data, size_t startPixel, size_t endPixel) {
     const hn::ScalableTag<float> df;
     const hn::ScalableTag<int32_t> di;
     const size_t N = hn::Lanes(df);
@@ -120,8 +120,8 @@ size_t ProcessImage3DSIMD_Tetrahedral_Bulk(const LutData3D& lut, float* data, si
     auto step_g = hn::Set(di, 3 * lut_size);
     auto step_b = hn::Set(di, 3 * lut_size2);
 
-    size_t i = 0;
-    for (; i + N <= numPixels; i += N) {
+    size_t i = startPixel;
+    for (; i + N <= endPixel; i += N) {
         hn::Vec<decltype(df)> r, g, b;
         hn::LoadInterleaved3(df, data + i * 3, r, g, b);
 
@@ -220,8 +220,8 @@ HWY_AFTER_NAMESPACE();
 #if HWY_ONCE
 namespace cubelut {
 
-HWY_EXPORT(ProcessImage3DSIMD_Trilinear_Bulk);
-HWY_EXPORT(ProcessImage3DSIMD_Tetrahedral_Bulk);
+HWY_EXPORT(ProcessPixels3DSIMD_Trilinear_Bulk);
+HWY_EXPORT(ProcessPixels3DSIMD_Tetrahedral_Bulk);
 
 static float clamp(float v, float min, float max) { return std::max(min, std::min(max, v)); }
 static float lerp(float a, float b, float t) { return a + t * (b - a); }
@@ -368,15 +368,13 @@ std::array<float, 3> Processor::process(const Lut& lut, const std::array<float, 
     return result;
 }
 
-void Processor::processImage(const Lut& lut, float* data, size_t width, size_t height, Interpolation interp) {
-    if (!lut.isValid() || !data) return;
-    
-    size_t numPixels = width * height;
+void Processor::processPixels(const Lut& lut, float* data, size_t startIndex, size_t endIndex, Interpolation interp) {
+    if (!lut.isValid() || !data || startIndex >= endIndex) return;
     
     if (lut.shaper1D.has_value()) {
         const auto& shaper = *lut.shaper1D;
         // Simple scalar loop for 1D shaper for now
-        for (size_t i = 0; i < numPixels; ++i) {
+        for (size_t i = startIndex; i < endIndex; ++i) {
             std::array<float, 3> pixel = {data[i * 3], data[i * 3 + 1], data[i * 3 + 2]};
             auto result = process1D(shaper, pixel);
             data[i * 3] = result[0];
@@ -386,16 +384,16 @@ void Processor::processImage(const Lut& lut, float* data, size_t width, size_t h
     }
     
     if (lut.grid3D.has_value()) {
-        size_t i = 0;
+        size_t i = startIndex;
         const auto& grid = *lut.grid3D;
         if (interp == Interpolation::Tetrahedral) {
-            i = HWY_DYNAMIC_DISPATCH(ProcessImage3DSIMD_Tetrahedral_Bulk)(grid, data, numPixels);
+            i = HWY_DYNAMIC_DISPATCH(ProcessPixels3DSIMD_Tetrahedral_Bulk)(grid, data, startIndex, endIndex);
         } else {
-            i = HWY_DYNAMIC_DISPATCH(ProcessImage3DSIMD_Trilinear_Bulk)(grid, data, numPixels);
+            i = HWY_DYNAMIC_DISPATCH(ProcessPixels3DSIMD_Trilinear_Bulk)(grid, data, startIndex, endIndex);
         }
         
-        // Tail pixels
-        for (; i < numPixels; ++i) {
+        // Tail pixels (if endIndex is not aligned with SIMD lanes)
+        for (; i < endIndex; ++i) {
             std::array<float, 3> pixel = {data[i * 3], data[i * 3 + 1], data[i * 3 + 2]};
             auto result = (interp == Interpolation::Tetrahedral) ? process3DTetrahedral(grid, pixel) : process3DTrilinear(grid, pixel);
             data[i * 3] = result[0];
