@@ -212,6 +212,78 @@ size_t ProcessPixels3DSIMD_Tetrahedral_Bulk(const LutData3D& lut, float* data, s
     return i;
 }
 
+
+// -------------------------------------------------------------
+// 3. 1D Shaper SIMD Impl
+// -------------------------------------------------------------
+size_t ProcessPixels1DSIMD_Bulk(const LutData1D& lut, float* data, size_t startPixel, size_t endPixel) {
+    const hn::ScalableTag<float> df;
+    const hn::ScalableTag<int32_t> di;
+    const size_t N = hn::Lanes(df);
+
+    // Degenerate 1-entry LUT: fall back to scalar path.
+    if (lut.size < 2) return startPixel;
+
+    float size_m1 = static_cast<float>(lut.size - 1);
+    auto v_min_r   = hn::Set(df, lut.domain.min[0]);
+    auto v_min_g   = hn::Set(df, lut.domain.min[1]);
+    auto v_min_b   = hn::Set(df, lut.domain.min[2]);
+    auto v_scale_r = hn::Set(df, size_m1 / (lut.domain.max[0] - lut.domain.min[0]));
+    auto v_scale_g = hn::Set(df, size_m1 / (lut.domain.max[1] - lut.domain.min[1]));
+    auto v_scale_b = hn::Set(df, size_m1 / (lut.domain.max[2] - lut.domain.min[2]));
+    auto v_zero    = hn::Zero(df);
+    auto v_size_m1 = hn::Set(df, size_m1);
+    auto v_max_idx = hn::Set(di, lut.size - 2);  // floor index is clamped to [0, size-2]
+    auto v_step3   = hn::Set(di, 3);             // stride between entries: R0G0B0 R1G1B1 ...
+    const float* lut_data = lut.data.data();
+
+    size_t i = startPixel;
+    for (; i + N <= endPixel; i += N) {
+        hn::Vec<decltype(df)> r, g, b;
+        hn::LoadInterleaved3(df, data + i * 3, r, g, b);
+
+        // Normalize to LUT coordinate space
+        r = hn::Clamp(hn::Mul(hn::Sub(r, v_min_r), v_scale_r), v_zero, v_size_m1);
+        g = hn::Clamp(hn::Mul(hn::Sub(g, v_min_g), v_scale_g), v_zero, v_size_m1);
+        b = hn::Clamp(hn::Mul(hn::Sub(b, v_min_b), v_scale_b), v_zero, v_size_m1);
+
+        // Floor index, clamped to valid interpolation range [0, size-2]
+        auto idx_r = hn::Min(hn::ConvertTo(di, hn::Floor(r)), v_max_idx);
+        auto idx_g = hn::Min(hn::ConvertTo(di, hn::Floor(g)), v_max_idx);
+        auto idx_b = hn::Min(hn::ConvertTo(di, hn::Floor(b)), v_max_idx);
+
+        // Fractional parts
+        auto frac_r = hn::Sub(r, hn::ConvertTo(df, idx_r));
+        auto frac_g = hn::Sub(g, hn::ConvertTo(df, idx_g));
+        auto frac_b = hn::Sub(b, hn::ConvertTo(df, idx_b));
+
+        // LUT data layout: [R0, G0, B0, R1, G1, B1, ...]
+        // R channel uses lut_data[idx*3 + 0]; G uses +1; B uses +2.
+        // GatherIndex(df, base, offsets) loads base[offsets[lane]] per lane.
+        auto off_r0 = hn::Mul(idx_r, v_step3);
+        auto off_r1 = hn::Add(off_r0, v_step3);
+        auto off_g0 = hn::Mul(idx_g, v_step3);
+        auto off_g1 = hn::Add(off_g0, v_step3);
+        auto off_b0 = hn::Mul(idx_b, v_step3);
+        auto off_b1 = hn::Add(off_b0, v_step3);
+
+        auto r0 = hn::GatherIndex(df, lut_data + 0, off_r0);
+        auto r1 = hn::GatherIndex(df, lut_data + 0, off_r1);
+        auto g0 = hn::GatherIndex(df, lut_data + 1, off_g0);
+        auto g1 = hn::GatherIndex(df, lut_data + 1, off_g1);
+        auto b0 = hn::GatherIndex(df, lut_data + 2, off_b0);
+        auto b1 = hn::GatherIndex(df, lut_data + 2, off_b1);
+
+        // Linear interpolation: result = v0 + frac * (v1 - v0)
+        r = hn::MulAdd(frac_r, hn::Sub(r1, r0), r0);
+        g = hn::MulAdd(frac_g, hn::Sub(g1, g0), g0);
+        b = hn::MulAdd(frac_b, hn::Sub(b1, b0), b0);
+
+        hn::StoreInterleaved3(r, g, b, df, data + i * 3);
+    }
+    return i;
+}
+
 } // HWY_NAMESPACE
 } // namespace cubelut
 HWY_AFTER_NAMESPACE();
@@ -222,6 +294,7 @@ namespace cubelut {
 
 HWY_EXPORT(ProcessPixels3DSIMD_Trilinear_Bulk);
 HWY_EXPORT(ProcessPixels3DSIMD_Tetrahedral_Bulk);
+HWY_EXPORT(ProcessPixels1DSIMD_Bulk);
 
 static float clamp(float v, float min, float max) { return std::max(min, std::min(max, v)); }
 static float lerp(float a, float b, float t) { return a + t * (b - a); }
@@ -373,11 +446,13 @@ void Processor::processPixels(const Lut& lut, float* data, size_t startIndex, si
     
     if (lut.shaper1D.has_value()) {
         const auto& shaper = *lut.shaper1D;
-        // Simple scalar loop for 1D shaper for now
-        for (size_t i = startIndex; i < endIndex; ++i) {
+        // Dispatch to the SIMD-accelerated 1D shaper bulk processor.
+        size_t i = HWY_DYNAMIC_DISPATCH(ProcessPixels1DSIMD_Bulk)(shaper, data, startIndex, endIndex);
+        // Scalar tail: handles remaining pixels when total count is not a multiple of SIMD lane width.
+        for (; i < endIndex; ++i) {
             std::array<float, 3> pixel = {data[i * 3], data[i * 3 + 1], data[i * 3 + 2]};
             auto result = process1D(shaper, pixel);
-            data[i * 3] = result[0];
+            data[i * 3]     = result[0];
             data[i * 3 + 1] = result[1];
             data[i * 3 + 2] = result[2];
         }

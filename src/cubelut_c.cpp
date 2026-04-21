@@ -174,8 +174,9 @@ const float* cubelut_get_raw_rgb_data_for_shaper1d(const cubelut_lut_t* lut, siz
 }
 
 void cubelut_free_buffer(void* buffer) {
-    // Both float* and uint16_t* are allocated using new[]
-    delete[] static_cast<char*>(buffer);
+    // Both float* and uint16_t* are allocated using new[].
+    // Use ::operator delete[] to avoid UB from type-punning through char*.
+    ::operator delete[](buffer);
 }
 
 void cubelut_process_image_chunk(

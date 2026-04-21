@@ -1,7 +1,7 @@
 #include "cubelut/parser.hpp"
 #include <fstream>
 #include <vector>
-#include <iostream>
+#include <charconv>  // std::from_chars for integer parsing
 #include "fast_float/fast_float.h"
 
 namespace cubelut {
@@ -121,7 +121,8 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
         if (match_prefix("LUT_1D_SIZE ", 12)) {
             skip_whitespace();
             int size;
-            auto res = fast_float::from_chars(p, end, size);
+            // Use std::from_chars (C++17 <charconv>) for correct integer parsing semantics.
+            auto res = std::from_chars(p, end, size);
             if (res.ec == std::errc() && size > 0 && size <= MAX_1D_SIZE) {
                 LutData1D d1;
                 d1.size = size;
@@ -129,7 +130,7 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
                 expected_1d_items = size * 3;
                 d1.data.reserve(expected_1d_items);
                 lut.shaper1D = std::move(d1);
-                
+
                 current_domain = Domain{}; // reset domain
                 p = res.ptr;
             } else {
@@ -142,7 +143,8 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
         if (match_prefix("LUT_3D_SIZE ", 12)) {
             skip_whitespace();
             int size;
-            auto res = fast_float::from_chars(p, end, size);
+            // Use std::from_chars (C++17 <charconv>) for correct integer parsing semantics.
+            auto res = std::from_chars(p, end, size);
             if (res.ec == std::errc() && size > 0 && size <= MAX_3D_SIZE) {
                 LutData3D d3;
                 d3.size = size;
@@ -150,7 +152,7 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
                 expected_3d_items = size * size * size * 3;
                 d3.data.reserve(expected_3d_items);
                 lut.grid3D = std::move(d3);
-                
+
                 current_domain = Domain{}; // reset domain
                 p = res.ptr;
             } else {
@@ -162,22 +164,28 @@ std::optional<Lut> Parser::fromString(std::string_view content) {
 
         if (match_prefix("DOMAIN_MIN ", 11)) {
             skip_whitespace();
+            bool ok = true;
             for (int i = 0; i < 3; ++i) {
                 auto res = fast_float::from_chars(p, end, current_domain.min[i]);
+                if (res.ec != std::errc()) { ok = false; break; }  // Corrupted DOMAIN_MIN
                 p = res.ptr;
                 skip_whitespace();
             }
+            if (!ok) return std::nullopt;
             skip_line();
             continue;
         }
 
         if (match_prefix("DOMAIN_MAX ", 11)) {
             skip_whitespace();
+            bool ok = true;
             for (int i = 0; i < 3; ++i) {
                 auto res = fast_float::from_chars(p, end, current_domain.max[i]);
+                if (res.ec != std::errc()) { ok = false; break; }  // Corrupted DOMAIN_MAX
                 p = res.ptr;
                 skip_whitespace();
             }
+            if (!ok) return std::nullopt;
             skip_line();
             continue;
         }
