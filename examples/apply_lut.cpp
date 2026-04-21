@@ -49,20 +49,28 @@ int main(int argc, char** argv) {
 
     // Apply LUT (Multi-threaded Chunking)
     std::cout << "Applying LUT using multi-threaded chunking..." << std::endl;
-    
+
     unsigned int num_threads = std::thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;
-    
+
     std::cout << "  Spawning " << num_threads << " worker threads..." << std::endl;
-    
+
     std::vector<std::thread> threads;
     size_t total_pixels = width * height;
-    size_t chunk_size = total_pixels / num_threads;
-    
+
+    // Align chunk boundaries to 16-pixel (192-byte = 3 × 64-byte cache lines) multiples.
+    // This avoids False Sharing at thread boundaries and ensures each thread's range is a
+    // multiple of the widest SIMD lane count (AVX-512 float = 16 lanes), minimising the
+    // scalar tail work that each thread has to fall back to.
+    constexpr size_t SIMD_ALIGN = 16;
+    size_t base_chunk = total_pixels / num_threads;
+    size_t chunk_size = ((base_chunk + SIMD_ALIGN - 1) / SIMD_ALIGN) * SIMD_ALIGN;
+
     for (unsigned int t = 0; t < num_threads; ++t) {
         size_t start_idx = t * chunk_size;
-        size_t end_idx = (t == num_threads - 1) ? total_pixels : start_idx + chunk_size;
-        
+        if (start_idx >= total_pixels) break;  // fewer pixels than threads × align
+        size_t end_idx = std::min(start_idx + chunk_size, total_pixels);
+
         threads.emplace_back([&lut, &imgFloat, start_idx, end_idx]() {
             cubelut::Processor::processPixels(lut, imgFloat.data(), start_idx, end_idx);
         });

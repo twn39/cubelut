@@ -284,6 +284,64 @@ size_t ProcessPixels1DSIMD_Bulk(const LutData1D& lut, float* data, size_t startP
     return i;
 }
 
+
+// -------------------------------------------------------------
+// 4. RGB float32 → RGBA float32 packing
+// -------------------------------------------------------------
+size_t PackRGBToRGBA32_Bulk(const float* HWY_RESTRICT rgb_in,
+                             float*       HWY_RESTRICT rgba_out,
+                             size_t numPixels) {
+    const hn::ScalableTag<float> df;
+    const size_t N = hn::Lanes(df);
+    const auto v_alpha = hn::Set(df, 1.0f);
+
+    size_t i = 0;
+    for (; i + N <= numPixels; i += N) {
+        hn::Vec<decltype(df)> r, g, b;
+        hn::LoadInterleaved3(df, rgb_in + i * 3, r, g, b);
+        hn::StoreInterleaved4(r, g, b, v_alpha, df, rgba_out + i * 4);
+    }
+    return i;
+}
+
+// -------------------------------------------------------------
+// 5. RGB float32 → RGBA float16 packing
+//    Strategy:
+//    - Load N float32 pixels per lane group
+//    - DemoteTo(df16, ch32) converts each float32 channel to float16
+//      (same lane count N, output vector is N*2 bytes instead of N*4)
+//    - BitCast float16 -> uint16 for type-safe storage
+//    - StoreInterleaved4 writes [R16, G16, B16, A16] interleaved
+// -------------------------------------------------------------
+size_t PackRGBToRGBA16_Bulk(const float*   HWY_RESTRICT rgb_in,
+                             uint16_t*      HWY_RESTRICT rgba16_out,
+                             size_t numPixels) {
+    const hn::ScalableTag<float> df32;
+    // float16 tag: same lane count N, each lane 2 bytes
+    const hn::Rebind<hwy::float16_t, decltype(df32)> df16;
+    // uint16 tag: same shape as df16 for BitCast + StoreInterleaved4
+    const hn::RebindToUnsigned<decltype(df16)> du16;
+    const size_t N = hn::Lanes(df32);
+
+    // IEEE 754 half-precision 1.0f = 0x3C00
+    const auto v_alpha = hn::Set(du16, uint16_t{0x3C00});
+
+    size_t i = 0;
+    for (; i + N <= numPixels; i += N) {
+        hn::Vec<decltype(df32)> r32, g32, b32;
+        hn::LoadInterleaved3(df32, rgb_in + i * 3, r32, g32, b32);
+
+        // DemoteTo: float32 → float16 (N lanes, vector shrinks by half)
+        // BitCast:  float16 → uint16  (same bits, type-safe for storage)
+        auto r_u16 = hn::BitCast(du16, hn::DemoteTo(df16, r32));
+        auto g_u16 = hn::BitCast(du16, hn::DemoteTo(df16, g32));
+        auto b_u16 = hn::BitCast(du16, hn::DemoteTo(df16, b32));
+
+        hn::StoreInterleaved4(r_u16, g_u16, b_u16, v_alpha, du16, rgba16_out + i * 4);
+    }
+    return i;
+}
+
 } // HWY_NAMESPACE
 } // namespace cubelut
 HWY_AFTER_NAMESPACE();
@@ -295,6 +353,8 @@ namespace cubelut {
 HWY_EXPORT(ProcessPixels3DSIMD_Trilinear_Bulk);
 HWY_EXPORT(ProcessPixels3DSIMD_Tetrahedral_Bulk);
 HWY_EXPORT(ProcessPixels1DSIMD_Bulk);
+HWY_EXPORT(PackRGBToRGBA32_Bulk);
+HWY_EXPORT(PackRGBToRGBA16_Bulk);
 
 static float clamp(float v, float min, float max) { return std::max(min, std::min(max, v)); }
 static float lerp(float a, float b, float t) { return a + t * (b - a); }
@@ -475,6 +535,54 @@ void Processor::processPixels(const Lut& lut, float* data, size_t startIndex, si
             data[i * 3 + 1] = result[1];
             data[i * 3 + 2] = result[2];
         }
+    }
+}
+
+void Processor::convertRGBToRGBA32(const float* rgb, float* rgba, size_t numPixels) {
+    if (!rgb || !rgba || numPixels == 0) return;
+    size_t i = HWY_DYNAMIC_DISPATCH(PackRGBToRGBA32_Bulk)(rgb, rgba, numPixels);
+    // Scalar tail for remaining pixels not covered by a full SIMD vector
+    for (; i < numPixels; ++i) {
+        rgba[i * 4 + 0] = rgb[i * 3 + 0];
+        rgba[i * 4 + 1] = rgb[i * 3 + 1];
+        rgba[i * 4 + 2] = rgb[i * 3 + 2];
+        rgba[i * 4 + 3] = 1.0f;
+    }
+}
+
+void Processor::convertRGBToRGBA16(const float* rgb, uint16_t* rgba16, size_t numPixels) {
+    if (!rgb || !rgba16 || numPixels == 0) return;
+    size_t i = HWY_DYNAMIC_DISPATCH(PackRGBToRGBA16_Bulk)(rgb, rgba16, numPixels);
+    // Scalar tail: use the same rounding-correct float_to_half as before
+    constexpr uint16_t kAlphaFP16 = 0x3C00;  // 1.0f in IEEE 754 half
+    auto scalar_f32_to_f16 = [](float v) -> uint16_t {
+        // Ryg's round-to-nearest-even float-to-half (public domain)
+        union FP32 { uint32_t u; float f; };
+        FP32 f; f.f = v;
+        FP32 f32inf  = {255u << 23};
+        FP32 f16max  = {(127u + 16u) << 23};
+        FP32 magic   = {((127u - 15u) + (23u - 10u) + 1u) << 23};
+        uint32_t sign = f.u & 0x80000000u;
+        f.u ^= sign;
+        uint16_t o;
+        if (f.u >= f16max.u) {
+            o = (f.u > f32inf.u) ? uint16_t{0x7e00} : uint16_t{0x7c00};
+        } else if (f.u < (113u << 23)) {
+            f.f += magic.f;
+            o = static_cast<uint16_t>(f.u - magic.u);
+        } else {
+            uint32_t mant_odd = (f.u >> 13) & 1u;
+            f.u += (static_cast<uint32_t>(15 - 127) << 23) + 0xfffu;
+            f.u += mant_odd;
+            o = static_cast<uint16_t>(f.u >> 13);
+        }
+        return o | static_cast<uint16_t>(sign >> 16);
+    };
+    for (; i < numPixels; ++i) {
+        rgba16[i * 4 + 0] = scalar_f32_to_f16(rgb[i * 3 + 0]);
+        rgba16[i * 4 + 1] = scalar_f32_to_f16(rgb[i * 3 + 1]);
+        rgba16[i * 4 + 2] = scalar_f32_to_f16(rgb[i * 3 + 2]);
+        rgba16[i * 4 + 3] = kAlphaFP16;
     }
 }
 

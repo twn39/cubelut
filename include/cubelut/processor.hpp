@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include "lut.hpp"
 
 namespace cubelut {
@@ -24,6 +25,14 @@ public:
     static void processImage(const Lut& lut, float* data, size_t width, size_t height, Interpolation interp = Interpolation::Tetrahedral) {
         processPixels(lut, data, 0, width * height, interp);
     }
+
+    // SIMD-accelerated RGB float32 → RGBA float32 packing (alpha channel = 1.0f).
+    // `rgba` must point to a buffer of at least numPixels * 4 floats.
+    static void convertRGBToRGBA32(const float* rgb, float* rgba, size_t numPixels);
+
+    // SIMD-accelerated RGB float32 → RGBA float16 packing (alpha = 0x3C00 = 1.0f in IEEE 754 half).
+    // `rgba16` must point to a buffer of at least numPixels * 4 uint16_t values.
+    static void convertRGBToRGBA16(const float* rgb, uint16_t* rgba16, size_t numPixels);
 
 private:
     static std::array<float, 3> process1D(const LutData1D& lut, const std::array<float, 3>& pixel);
