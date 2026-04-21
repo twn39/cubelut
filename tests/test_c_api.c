@@ -208,7 +208,72 @@ int main(int argc, char** argv) {
     free(dummy_img);
     printf("  Chunk verification passed.\n");
 
-    // Clean up
+    /* ------------------------------------------------------------------
+     * FEAT-2: Domain accessor tests
+     * ------------------------------------------------------------------ */
+    printf("\nTesting Domain Accessors (FEAT-2)...\n");
+
+    float min_r, min_g, min_b, max_r, max_g, max_b;
+
+    /* cubelut_get_grid3d_domain – the loaded LUT has standard [0,1] domain */
+    bool domain_ok = cubelut_get_grid3d_domain(
+        lut, &min_r, &min_g, &min_b, &max_r, &max_g, &max_b);
+
+    if (!domain_ok) {
+        fprintf(stderr, "Error: cubelut_get_grid3d_domain returned false for a valid 3D grid LUT.\n");
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+    printf("  Grid3D Domain: [%.4f, %.4f, %.4f] to [%.4f, %.4f, %.4f]\n",
+           min_r, min_g, min_b, max_r, max_g, max_b);
+
+    /* Standard .cube default domain → [0, 1] */
+    if (min_r != 0.0f || min_g != 0.0f || min_b != 0.0f ||
+        max_r != 1.0f || max_g != 1.0f || max_b != 1.0f) {
+        fprintf(stderr, "Error: Unexpected Grid3D domain values (expected [0,1]).\n");
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+    printf("  Grid3D domain correctly reports [0,1] per channel.\n");
+
+    /* cubelut_get_shaper1d_domain → must return false (no 1D shaper in this file) */
+    bool shaper_ok = cubelut_get_shaper1d_domain(
+        lut, &min_r, &min_g, &min_b, &max_r, &max_g, &max_b);
+    if (shaper_ok) {
+        fprintf(stderr, "Error: cubelut_get_shaper1d_domain should return false (no 1D shaper).\n");
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+    printf("  cubelut_get_shaper1d_domain correctly returns false (no 1D shaper).\n");
+
+    /* NULL lut must not crash and must return false */
+    if (cubelut_get_grid3d_domain(NULL, &min_r, &min_g, &min_b, &max_r, &max_g, &max_b)) {
+        fprintf(stderr, "Error: Domain accessor should return false for NULL lut.\n");
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+    printf("  NULL lut correctly handled (no crash, returns false).\n");
+
+    /* Nullable out-pointers: pass NULL for channels we do not care about */
+    bool partial_ok = cubelut_get_grid3d_domain(lut, &min_r, NULL, NULL, &max_r, NULL, NULL);
+    if (!partial_ok || min_r != 0.0f || max_r != 1.0f) {
+        fprintf(stderr, "Error: Partial (nullable) domain accessor call failed.\n");
+        cubelut_free_buffer(rgba16_data);
+        cubelut_free_buffer(rgba_data);
+        cubelut_free(lut);
+        return 1;
+    }
+    printf("  Nullable out-pointers work correctly.\n");
+
+    /* Clean up */
     cubelut_free_buffer(rgba16_data);
     cubelut_free_buffer(rgba_data);
     cubelut_free(lut);
