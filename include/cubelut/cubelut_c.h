@@ -117,6 +117,25 @@ void cubelut_process_image_chunk(
     bool use_tetrahedral
 );
 
+/**
+ * Queries the input domain of the 3D Grid LUT.
+ * On return, the six out-pointers receive [min_r, min_g, min_b] and
+ * [max_r, max_g, max_b].  Any out-pointer may be NULL if not needed.
+ * Returns false if the LUT has no 3D grid or if `lut` is NULL.
+ */
+bool cubelut_get_grid3d_domain(const cubelut_lut_t* lut,
+                                float* min_r, float* min_g, float* min_b,
+                                float* max_r, float* max_g, float* max_b);
+
+/**
+ * Queries the input domain of the 1D Shaper LUT.
+ * Same semantics as cubelut_get_grid3d_domain.
+ * Returns false if the LUT has no 1D shaper or if `lut` is NULL.
+ */
+bool cubelut_get_shaper1d_domain(const cubelut_lut_t* lut,
+                                  float* min_r, float* min_g, float* min_b,
+                                  float* max_r, float* max_g, float* max_b);
+
 #ifdef __cplusplus
 }
 #endif

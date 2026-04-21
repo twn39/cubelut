@@ -130,4 +130,27 @@ void cubelut_process_image_chunk(
     cubelut::Processor::processPixels(lut->inner, image_rgb_data, start_pixel_idx, end_pixel_idx, interp);
 }
 
+// Helper: write a float value to an optional out-pointer.
+static inline void assign_if(float* ptr, float v) { if (ptr) *ptr = v; }
+
+bool cubelut_get_grid3d_domain(const cubelut_lut_t* lut,
+                                float* min_r, float* min_g, float* min_b,
+                                float* max_r, float* max_g, float* max_b) {
+    if (!lut || !cubelut_has_grid3d(lut)) return false;
+    const auto& dom = lut->inner.grid3D->domain;
+    assign_if(min_r, dom.min[0]); assign_if(min_g, dom.min[1]); assign_if(min_b, dom.min[2]);
+    assign_if(max_r, dom.max[0]); assign_if(max_g, dom.max[1]); assign_if(max_b, dom.max[2]);
+    return true;
+}
+
+bool cubelut_get_shaper1d_domain(const cubelut_lut_t* lut,
+                                  float* min_r, float* min_g, float* min_b,
+                                  float* max_r, float* max_g, float* max_b) {
+    if (!lut || !cubelut_has_shaper1d(lut)) return false;
+    const auto& dom = lut->inner.shaper1D->domain;
+    assign_if(min_r, dom.min[0]); assign_if(min_g, dom.min[1]); assign_if(min_b, dom.min[2]);
+    assign_if(max_r, dom.max[0]); assign_if(max_g, dom.max[1]); assign_if(max_b, dom.max[2]);
+    return true;
+}
+
 } // extern "C"

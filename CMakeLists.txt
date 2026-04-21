@@ -38,6 +38,7 @@ add_library(cubelut
     src/lut.cpp
     src/parser.cpp
     src/processor.cpp
+    src/pipeline.cpp
     src/cubelut_c.cpp
 )
 
