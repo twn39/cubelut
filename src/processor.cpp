@@ -486,6 +486,262 @@ size_t ConvertF32ToRGBA8_Bulk(const float*   HWY_RESTRICT src_rgb,
     return i;
 }
 
+// ──────────────────────────────────────────────────────────────
+// RGBA / BGRA float32: single-pass using LoadInterleaved4.
+// Alpha channel is carried in register and written back unchanged.
+// BGRA variant: swap r↔b variable names at Load/Store time only.
+// The LUT lookup body is byte-for-byte identical to the RGB variants.
+// ──────────────────────────────────────────────────────────────
+
+size_t ProcessPixels3DSIMD_Trilinear_RGBA_Bulk(const LutData3D& lut, float* data, size_t startPixel, size_t endPixel) {
+    const hn::ScalableTag<float>   df;
+    const hn::ScalableTag<int32_t> di;
+    const size_t N = hn::Lanes(df);
+    float scale_r = (lut.size-1)/(lut.domain.max[0]-lut.domain.min[0]);
+    float scale_g = (lut.size-1)/(lut.domain.max[1]-lut.domain.min[1]);
+    float scale_b = (lut.size-1)/(lut.domain.max[2]-lut.domain.min[2]);
+    auto v_min_r=hn::Set(df,lut.domain.min[0]), v_min_g=hn::Set(df,lut.domain.min[1]), v_min_b=hn::Set(df,lut.domain.min[2]);
+    auto v_scale_r=hn::Set(df,scale_r), v_scale_g=hn::Set(df,scale_g), v_scale_b=hn::Set(df,scale_b);
+    auto v_zero=hn::Zero(df), v_size_m1=hn::Set(df,(float)(lut.size-1));
+    auto v_max_idx=hn::Set(di,lut.size-2);
+    int lut_size=lut.size, lut_size2=lut.size*lut.size;
+    const float* lut_data=lut.data.data();
+    size_t i=startPixel;
+    for(; i+N<=endPixel; i+=N) {
+        hn::Vec<decltype(df)> r,g,b,a;
+        hn::LoadInterleaved4(df, data+i*4, r,g,b,a);
+        r=hn::Clamp(hn::Mul(hn::Sub(r,v_min_r),v_scale_r),v_zero,v_size_m1);
+        g=hn::Clamp(hn::Mul(hn::Sub(g,v_min_g),v_scale_g),v_zero,v_size_m1);
+        b=hn::Clamp(hn::Mul(hn::Sub(b,v_min_b),v_scale_b),v_zero,v_size_m1);
+        auto idx_r=hn::Min(hn::ConvertTo(di,hn::Floor(r)),v_max_idx);
+        auto idx_g=hn::Min(hn::ConvertTo(di,hn::Floor(g)),v_max_idx);
+        auto idx_b=hn::Min(hn::ConvertTo(di,hn::Floor(b)),v_max_idx);
+        auto frac_r=hn::Sub(r,hn::ConvertTo(df,idx_r));
+        auto frac_g=hn::Sub(g,hn::ConvertTo(df,idx_g));
+        auto frac_b=hn::Sub(b,hn::ConvertTo(df,idx_b));
+        auto o000=hn::Mul(hn::Add(hn::Add(hn::Mul(idx_b,hn::Set(di,lut_size2)),hn::Mul(idx_g,hn::Set(di,lut_size))),idx_r),hn::Set(di,3));
+        auto o100=hn::Add(o000,hn::Set(di,3));
+        auto o010=hn::Add(o000,hn::Set(di,3*lut_size));
+        auto o110=hn::Add(o010,hn::Set(di,3));
+        auto o001=hn::Add(o000,hn::Set(di,3*lut_size2));
+        auto o101=hn::Add(o001,hn::Set(di,3));
+        auto o011=hn::Add(o001,hn::Set(di,3*lut_size));
+        auto o111=hn::Add(o011,hn::Set(di,3));
+        auto gr=[&](auto off,auto& or_,auto& og_,auto& ob_){
+            or_=hn::GatherIndex(df,lut_data+0,off);
+            og_=hn::GatherIndex(df,lut_data+1,off);
+            ob_=hn::GatherIndex(df,lut_data+2,off);
+        };
+        hn::Vec<decltype(df)> r000,g000,b000; gr(o000,r000,g000,b000);
+        hn::Vec<decltype(df)> r100,g100,b100; gr(o100,r100,g100,b100);
+        hn::Vec<decltype(df)> r010,g010,b010; gr(o010,r010,g010,b010);
+        hn::Vec<decltype(df)> r110,g110,b110; gr(o110,r110,g110,b110);
+        hn::Vec<decltype(df)> r001,g001,b001; gr(o001,r001,g001,b001);
+        hn::Vec<decltype(df)> r101,g101,b101; gr(o101,r101,g101,b101);
+        hn::Vec<decltype(df)> r011,g011,b011; gr(o011,r011,g011,b011);
+        hn::Vec<decltype(df)> r111,g111,b111; gr(o111,r111,g111,b111);
+        auto lerp=[](auto a,auto b,auto t){return hn::MulAdd(t,hn::Sub(b,a),a);};
+        auto ic=[&](auto c000,auto c100,auto c010,auto c110,auto c001,auto c101,auto c011,auto c111){
+            return lerp(lerp(lerp(c000,c100,frac_r),lerp(c010,c110,frac_r),frac_g),
+                        lerp(lerp(c001,c101,frac_r),lerp(c011,c111,frac_r),frac_g),frac_b);
+        };
+        r=ic(r000,r100,r010,r110,r001,r101,r011,r111);
+        g=ic(g000,g100,g010,g110,g001,g101,g011,g111);
+        b=ic(b000,b100,b010,b110,b001,b101,b011,b111);
+        hn::StoreInterleaved4(r,g,b,a, df, data+i*4);
+    }
+    return i;
+}
+
+// BGRA Trilinear: swap r↔b at load/store, identical LUT body
+size_t ProcessPixels3DSIMD_Trilinear_BGRA_Bulk(const LutData3D& lut, float* data, size_t startPixel, size_t endPixel) {
+    const hn::ScalableTag<float>   df;
+    const hn::ScalableTag<int32_t> di;
+    const size_t N = hn::Lanes(df);
+    float scale_r=(lut.size-1)/(lut.domain.max[0]-lut.domain.min[0]);
+    float scale_g=(lut.size-1)/(lut.domain.max[1]-lut.domain.min[1]);
+    float scale_b=(lut.size-1)/(lut.domain.max[2]-lut.domain.min[2]);
+    auto v_min_r=hn::Set(df,lut.domain.min[0]), v_min_g=hn::Set(df,lut.domain.min[1]), v_min_b=hn::Set(df,lut.domain.min[2]);
+    auto v_scale_r=hn::Set(df,scale_r), v_scale_g=hn::Set(df,scale_g), v_scale_b=hn::Set(df,scale_b);
+    auto v_zero=hn::Zero(df), v_size_m1=hn::Set(df,(float)(lut.size-1));
+    auto v_max_idx=hn::Set(di,lut.size-2);
+    int lut_size=lut.size, lut_size2=lut.size*lut.size;
+    const float* lut_data=lut.data.data();
+    size_t i=startPixel;
+    for(; i+N<=endPixel; i+=N) {
+        hn::Vec<decltype(df)> r,g,b,a;
+        hn::LoadInterleaved4(df, data+i*4, b,g,r,a); // BGRA: b first, r third
+        r=hn::Clamp(hn::Mul(hn::Sub(r,v_min_r),v_scale_r),v_zero,v_size_m1);
+        g=hn::Clamp(hn::Mul(hn::Sub(g,v_min_g),v_scale_g),v_zero,v_size_m1);
+        b=hn::Clamp(hn::Mul(hn::Sub(b,v_min_b),v_scale_b),v_zero,v_size_m1);
+        auto idx_r=hn::Min(hn::ConvertTo(di,hn::Floor(r)),v_max_idx);
+        auto idx_g=hn::Min(hn::ConvertTo(di,hn::Floor(g)),v_max_idx);
+        auto idx_b=hn::Min(hn::ConvertTo(di,hn::Floor(b)),v_max_idx);
+        auto frac_r=hn::Sub(r,hn::ConvertTo(df,idx_r));
+        auto frac_g=hn::Sub(g,hn::ConvertTo(df,idx_g));
+        auto frac_b=hn::Sub(b,hn::ConvertTo(df,idx_b));
+        auto o000=hn::Mul(hn::Add(hn::Add(hn::Mul(idx_b,hn::Set(di,lut_size2)),hn::Mul(idx_g,hn::Set(di,lut_size))),idx_r),hn::Set(di,3));
+        auto o100=hn::Add(o000,hn::Set(di,3));
+        auto o010=hn::Add(o000,hn::Set(di,3*lut_size));
+        auto o110=hn::Add(o010,hn::Set(di,3));
+        auto o001=hn::Add(o000,hn::Set(di,3*lut_size2));
+        auto o101=hn::Add(o001,hn::Set(di,3));
+        auto o011=hn::Add(o001,hn::Set(di,3*lut_size));
+        auto o111=hn::Add(o011,hn::Set(di,3));
+        auto gr=[&](auto off,auto& or_,auto& og_,auto& ob_){
+            or_=hn::GatherIndex(df,lut_data+0,off);
+            og_=hn::GatherIndex(df,lut_data+1,off);
+            ob_=hn::GatherIndex(df,lut_data+2,off);
+        };
+        hn::Vec<decltype(df)> r000,g000,b000; gr(o000,r000,g000,b000);
+        hn::Vec<decltype(df)> r100,g100,b100; gr(o100,r100,g100,b100);
+        hn::Vec<decltype(df)> r010,g010,b010; gr(o010,r010,g010,b010);
+        hn::Vec<decltype(df)> r110,g110,b110; gr(o110,r110,g110,b110);
+        hn::Vec<decltype(df)> r001,g001,b001; gr(o001,r001,g001,b001);
+        hn::Vec<decltype(df)> r101,g101,b101; gr(o101,r101,g101,b101);
+        hn::Vec<decltype(df)> r011,g011,b011; gr(o011,r011,g011,b011);
+        hn::Vec<decltype(df)> r111,g111,b111; gr(o111,r111,g111,b111);
+        auto lerp=[](auto a,auto b,auto t){return hn::MulAdd(t,hn::Sub(b,a),a);};
+        auto ic=[&](auto c000,auto c100,auto c010,auto c110,auto c001,auto c101,auto c011,auto c111){
+            return lerp(lerp(lerp(c000,c100,frac_r),lerp(c010,c110,frac_r),frac_g),
+                        lerp(lerp(c001,c101,frac_r),lerp(c011,c111,frac_r),frac_g),frac_b);
+        };
+        r=ic(r000,r100,r010,r110,r001,r101,r011,r111);
+        g=ic(g000,g100,g010,g110,g001,g101,g011,g111);
+        b=ic(b000,b100,b010,b110,b001,b101,b011,b111);
+        hn::StoreInterleaved4(b,g,r,a, df, data+i*4); // BGRA: b first, r third
+    }
+    return i;
+}
+
+// Tetrahedral RGBA: identical body to Tetrahedral_Bulk, Load/StoreInterleaved4
+size_t ProcessPixels3DSIMD_Tetrahedral_RGBA_Bulk(const LutData3D& lut, float* data, size_t startPixel, size_t endPixel) {
+    const hn::ScalableTag<float>   df;
+    const hn::ScalableTag<int32_t> di;
+    const size_t N = hn::Lanes(df);
+    float scale_r=(lut.size-1)/(lut.domain.max[0]-lut.domain.min[0]);
+    float scale_g=(lut.size-1)/(lut.domain.max[1]-lut.domain.min[1]);
+    float scale_b=(lut.size-1)/(lut.domain.max[2]-lut.domain.min[2]);
+    auto v_min_r=hn::Set(df,lut.domain.min[0]), v_min_g=hn::Set(df,lut.domain.min[1]), v_min_b=hn::Set(df,lut.domain.min[2]);
+    auto v_scale_r=hn::Set(df,scale_r), v_scale_g=hn::Set(df,scale_g), v_scale_b=hn::Set(df,scale_b);
+    auto v_zero=hn::Zero(df), v_size_m1=hn::Set(df,(float)(lut.size-1));
+    auto v_max_idx=hn::Set(di,lut.size-2);
+    int lut_size=lut.size, lut_size2=lut.size*lut.size;
+    const float* lut_data=lut.data.data();
+    auto step_r=hn::Set(di,3), step_g=hn::Set(di,3*lut_size), step_b=hn::Set(di,3*lut_size2);
+    size_t i=startPixel;
+    for(; i+N<=endPixel; i+=N) {
+        hn::Vec<decltype(df)> r,g,b,a;
+        hn::LoadInterleaved4(df, data+i*4, r,g,b,a);
+        r=hn::Clamp(hn::Mul(hn::Sub(r,v_min_r),v_scale_r),v_zero,v_size_m1);
+        g=hn::Clamp(hn::Mul(hn::Sub(g,v_min_g),v_scale_g),v_zero,v_size_m1);
+        b=hn::Clamp(hn::Mul(hn::Sub(b,v_min_b),v_scale_b),v_zero,v_size_m1);
+        auto idx_r=hn::Min(hn::ConvertTo(di,hn::Floor(r)),v_max_idx);
+        auto idx_g=hn::Min(hn::ConvertTo(di,hn::Floor(g)),v_max_idx);
+        auto idx_b=hn::Min(hn::ConvertTo(di,hn::Floor(b)),v_max_idx);
+        auto d_r=hn::Sub(r,hn::ConvertTo(df,idx_r));
+        auto d_g=hn::Sub(g,hn::ConvertTo(df,idx_g));
+        auto d_b=hn::Sub(b,hn::ConvertTo(df,idx_b));
+        auto rg_min=hn::Min(d_r,d_g), rg_max=hn::Max(d_r,d_g);
+        auto x2=hn::Min(rg_min,d_b), mid=hn::Max(rg_min,d_b);
+        auto x0=hn::Max(rg_max,d_b), x1=hn::Min(rg_max,mid);
+        auto gt_r_f=hn::Gt(d_r,d_g), gt_g_f=hn::Gt(d_g,d_b), gt_b_f=hn::Gt(d_b,d_r);
+        auto gt_r=hn::RebindMask(di,gt_r_f), gt_g=hn::RebindMask(di,gt_g_f), gt_b=hn::RebindMask(di,gt_b_f);
+        auto max_r=hn::AndNot(gt_b,gt_r), max_g=hn::AndNot(gt_r,gt_g), max_b=hn::AndNot(gt_g,gt_b);
+        auto min_r=hn::AndNot(gt_r,gt_b), min_g=hn::AndNot(gt_g,gt_r), min_b=hn::AndNot(gt_b,gt_g);
+        auto off_pr=hn::Mul(idx_r,step_r), off_nr=hn::Add(off_pr,step_r);
+        auto off_pg=hn::Mul(idx_g,step_g), off_ng=hn::Add(off_pg,step_g);
+        auto off_pb=hn::Mul(idx_b,step_b), off_nb=hn::Add(off_pb,step_b);
+        auto off_c000=hn::Add(hn::Add(off_pr,off_pg),off_pb);
+        auto off_c111=hn::Add(hn::Add(off_nr,off_ng),off_nb);
+        auto off_ca=hn::Add(hn::Add(hn::IfThenElse(max_r,off_nr,off_pr),hn::IfThenElse(max_g,off_ng,off_pg)),hn::IfThenElse(max_b,off_nb,off_pb));
+        auto off_cb=hn::Add(hn::Add(hn::IfThenElse(min_r,off_pr,off_nr),hn::IfThenElse(min_g,off_pg,off_ng)),hn::IfThenElse(min_b,off_pb,off_nb));
+        auto gr=[&](auto off,auto& or_,auto& og_,auto& ob_){
+            or_=hn::GatherIndex(df,lut_data+0,off);
+            og_=hn::GatherIndex(df,lut_data+1,off);
+            ob_=hn::GatherIndex(df,lut_data+2,off);
+        };
+        hn::Vec<decltype(df)> r000,g000,b000; gr(off_c000,r000,g000,b000);
+        hn::Vec<decltype(df)> ra,ga,ba;        gr(off_ca,ra,ga,ba);
+        hn::Vec<decltype(df)> rb,gb,bb;        gr(off_cb,rb,gb,bb);
+        hn::Vec<decltype(df)> r111,g111,b111; gr(off_c111,r111,g111,b111);
+        auto blend=[&](auto c000,auto ca,auto cb,auto c111){
+            auto res=hn::MulAdd(x0,hn::Sub(ca,c000),c000);
+            res=hn::MulAdd(x1,hn::Sub(cb,ca),res);
+            return hn::MulAdd(x2,hn::Sub(c111,cb),res);
+        };
+        r=blend(r000,ra,rb,r111);
+        g=blend(g000,ga,gb,g111);
+        b=blend(b000,ba,bb,b111);
+        hn::StoreInterleaved4(r,g,b,a, df, data+i*4);
+    }
+    return i;
+}
+
+// Tetrahedral BGRA: swap r↔b at load/store
+size_t ProcessPixels3DSIMD_Tetrahedral_BGRA_Bulk(const LutData3D& lut, float* data, size_t startPixel, size_t endPixel) {
+    const hn::ScalableTag<float>   df;
+    const hn::ScalableTag<int32_t> di;
+    const size_t N = hn::Lanes(df);
+    float scale_r=(lut.size-1)/(lut.domain.max[0]-lut.domain.min[0]);
+    float scale_g=(lut.size-1)/(lut.domain.max[1]-lut.domain.min[1]);
+    float scale_b=(lut.size-1)/(lut.domain.max[2]-lut.domain.min[2]);
+    auto v_min_r=hn::Set(df,lut.domain.min[0]), v_min_g=hn::Set(df,lut.domain.min[1]), v_min_b=hn::Set(df,lut.domain.min[2]);
+    auto v_scale_r=hn::Set(df,scale_r), v_scale_g=hn::Set(df,scale_g), v_scale_b=hn::Set(df,scale_b);
+    auto v_zero=hn::Zero(df), v_size_m1=hn::Set(df,(float)(lut.size-1));
+    auto v_max_idx=hn::Set(di,lut.size-2);
+    int lut_size=lut.size, lut_size2=lut.size*lut.size;
+    const float* lut_data=lut.data.data();
+    auto step_r=hn::Set(di,3), step_g=hn::Set(di,3*lut_size), step_b=hn::Set(di,3*lut_size2);
+    size_t i=startPixel;
+    for(; i+N<=endPixel; i+=N) {
+        hn::Vec<decltype(df)> r,g,b,a;
+        hn::LoadInterleaved4(df, data+i*4, b,g,r,a); // BGRA
+        r=hn::Clamp(hn::Mul(hn::Sub(r,v_min_r),v_scale_r),v_zero,v_size_m1);
+        g=hn::Clamp(hn::Mul(hn::Sub(g,v_min_g),v_scale_g),v_zero,v_size_m1);
+        b=hn::Clamp(hn::Mul(hn::Sub(b,v_min_b),v_scale_b),v_zero,v_size_m1);
+        auto idx_r=hn::Min(hn::ConvertTo(di,hn::Floor(r)),v_max_idx);
+        auto idx_g=hn::Min(hn::ConvertTo(di,hn::Floor(g)),v_max_idx);
+        auto idx_b=hn::Min(hn::ConvertTo(di,hn::Floor(b)),v_max_idx);
+        auto d_r=hn::Sub(r,hn::ConvertTo(df,idx_r));
+        auto d_g=hn::Sub(g,hn::ConvertTo(df,idx_g));
+        auto d_b=hn::Sub(b,hn::ConvertTo(df,idx_b));
+        auto rg_min=hn::Min(d_r,d_g), rg_max=hn::Max(d_r,d_g);
+        auto x2=hn::Min(rg_min,d_b), mid=hn::Max(rg_min,d_b);
+        auto x0=hn::Max(rg_max,d_b), x1=hn::Min(rg_max,mid);
+        auto gt_r_f=hn::Gt(d_r,d_g), gt_g_f=hn::Gt(d_g,d_b), gt_b_f=hn::Gt(d_b,d_r);
+        auto gt_r=hn::RebindMask(di,gt_r_f), gt_g=hn::RebindMask(di,gt_g_f), gt_b=hn::RebindMask(di,gt_b_f);
+        auto max_r=hn::AndNot(gt_b,gt_r), max_g=hn::AndNot(gt_r,gt_g), max_b=hn::AndNot(gt_g,gt_b);
+        auto min_r=hn::AndNot(gt_r,gt_b), min_g=hn::AndNot(gt_g,gt_r), min_b=hn::AndNot(gt_b,gt_g);
+        auto off_pr=hn::Mul(idx_r,step_r), off_nr=hn::Add(off_pr,step_r);
+        auto off_pg=hn::Mul(idx_g,step_g), off_ng=hn::Add(off_pg,step_g);
+        auto off_pb=hn::Mul(idx_b,step_b), off_nb=hn::Add(off_pb,step_b);
+        auto off_c000=hn::Add(hn::Add(off_pr,off_pg),off_pb);
+        auto off_c111=hn::Add(hn::Add(off_nr,off_ng),off_nb);
+        auto off_ca=hn::Add(hn::Add(hn::IfThenElse(max_r,off_nr,off_pr),hn::IfThenElse(max_g,off_ng,off_pg)),hn::IfThenElse(max_b,off_nb,off_pb));
+        auto off_cb=hn::Add(hn::Add(hn::IfThenElse(min_r,off_pr,off_nr),hn::IfThenElse(min_g,off_pg,off_ng)),hn::IfThenElse(min_b,off_pb,off_nb));
+        auto gr=[&](auto off,auto& or_,auto& og_,auto& ob_){
+            or_=hn::GatherIndex(df,lut_data+0,off);
+            og_=hn::GatherIndex(df,lut_data+1,off);
+            ob_=hn::GatherIndex(df,lut_data+2,off);
+        };
+        hn::Vec<decltype(df)> r000,g000,b000; gr(off_c000,r000,g000,b000);
+        hn::Vec<decltype(df)> ra,ga,ba;        gr(off_ca,ra,ga,ba);
+        hn::Vec<decltype(df)> rb,gb,bb;        gr(off_cb,rb,gb,bb);
+        hn::Vec<decltype(df)> r111,g111,b111; gr(off_c111,r111,g111,b111);
+        auto blend=[&](auto c000,auto ca,auto cb,auto c111){
+            auto res=hn::MulAdd(x0,hn::Sub(ca,c000),c000);
+            res=hn::MulAdd(x1,hn::Sub(cb,ca),res);
+            return hn::MulAdd(x2,hn::Sub(c111,cb),res);
+        };
+        r=blend(r000,ra,rb,r111);
+        g=blend(g000,ga,gb,g111);
+        b=blend(b000,ba,bb,b111);
+        hn::StoreInterleaved4(b,g,r,a, df, data+i*4); // BGRA
+    }
+    return i;
+}
+
 } // HWY_NAMESPACE
 } // namespace cubelut
 HWY_AFTER_NAMESPACE();
@@ -504,6 +760,10 @@ HWY_EXPORT(ConvertRGB8ToF32_Bulk);
 HWY_EXPORT(ConvertF32ToRGB8_Bulk);
 HWY_EXPORT(ConvertRGBA8ToF32_Bulk);
 HWY_EXPORT(ConvertF32ToRGBA8_Bulk);
+HWY_EXPORT(ProcessPixels3DSIMD_Trilinear_RGBA_Bulk);
+HWY_EXPORT(ProcessPixels3DSIMD_Trilinear_BGRA_Bulk);
+HWY_EXPORT(ProcessPixels3DSIMD_Tetrahedral_RGBA_Bulk);
+HWY_EXPORT(ProcessPixels3DSIMD_Tetrahedral_BGRA_Bulk);
 
 static float clamp(float v, float min, float max) { return std::max(min, std::min(max, v)); }
 static float lerp(float a, float b, float t) { return a + t * (b - a); }
@@ -690,13 +950,99 @@ void Processor::processPixels(const Lut& lut, float* data, size_t startIndex, si
 void Processor::convertRGBToRGBA32(const float* rgb, float* rgba, size_t numPixels) {
     if (!rgb || !rgba || numPixels == 0) return;
     size_t i = HWY_DYNAMIC_DISPATCH(PackRGBToRGBA32_Bulk)(rgb, rgba, numPixels);
-    // Scalar tail for remaining pixels not covered by a full SIMD vector
     for (; i < numPixels; ++i) {
-        rgba[i * 4 + 0] = rgb[i * 3 + 0];
-        rgba[i * 4 + 1] = rgb[i * 3 + 1];
-        rgba[i * 4 + 2] = rgb[i * 3 + 2];
-        rgba[i * 4 + 3] = 1.0f;
+        rgba[i*4+0]=rgb[i*3+0]; rgba[i*4+1]=rgb[i*3+1];
+        rgba[i*4+2]=rgb[i*3+2]; rgba[i*4+3]=1.0f;
     }
+}
+
+// ── PixelLayout-aware processImage (single-pass SIMD for RGBA/BGRA) ──────────
+
+void Processor::processImage(const Lut& lut, float* data,
+                              size_t width, size_t height,
+                              PixelLayout layout, Interpolation interp)
+{
+    if (!lut.isValid() || !data) return;
+    const size_t total = width * height;
+    if (total == 0) return;
+
+    if (layout == PixelLayout::RGB_F32) {
+        // Fast path: existing in-place RGB route
+        return processPixels(lut, data, 0, total, interp);
+    }
+
+    if (!lut.grid3D.has_value()) return;
+    const auto& grid = *lut.grid3D;
+
+    // Helper: scalar tail for RGBA/BGRA (BGR_F32 is RGB with b↔r in pixel[])
+    auto scalar_rgba = [&](size_t from, bool bgr) {
+        for (size_t i = from; i < total; ++i) {
+            std::array<float,3> px;
+            if (bgr) px={data[i*4+2],data[i*4+1],data[i*4+0]};
+            else     px={data[i*4+0],data[i*4+1],data[i*4+2]};
+            auto r = (interp==Interpolation::Tetrahedral)
+                       ? process3DTetrahedral(grid,px) : process3DTrilinear(grid,px);
+            if (bgr) { data[i*4+2]=r[0]; data[i*4+1]=r[1]; data[i*4+0]=r[2]; }
+            else     { data[i*4+0]=r[0]; data[i*4+1]=r[1]; data[i*4+2]=r[2]; }
+            // data[i*4+3] (alpha) unchanged
+        }
+    };
+
+    size_t done = 0;
+    switch (layout) {
+    case PixelLayout::RGBA_F32:
+        done = (interp==Interpolation::Tetrahedral)
+            ? HWY_DYNAMIC_DISPATCH(ProcessPixels3DSIMD_Tetrahedral_RGBA_Bulk)(grid, data, 0, total)
+            : HWY_DYNAMIC_DISPATCH(ProcessPixels3DSIMD_Trilinear_RGBA_Bulk)  (grid, data, 0, total);
+        scalar_rgba(done, false);
+        break;
+    case PixelLayout::BGRA_F32:
+        done = (interp==Interpolation::Tetrahedral)
+            ? HWY_DYNAMIC_DISPATCH(ProcessPixels3DSIMD_Tetrahedral_BGRA_Bulk)(grid, data, 0, total)
+            : HWY_DYNAMIC_DISPATCH(ProcessPixels3DSIMD_Trilinear_BGRA_Bulk)  (grid, data, 0, total);
+        scalar_rgba(done, true);
+        break;
+    default: break;
+    }
+}
+
+void Processor::processImageParallel(const Lut& lut, float* data,
+                                      size_t width, size_t height,
+                                      PixelLayout layout, Interpolation interp,
+                                      unsigned numThreads)
+{
+    if (!lut.isValid() || !data) return;
+    if (layout == PixelLayout::RGB_F32) {
+        return processImageParallel(lut, data, width, height, interp, numThreads);
+    }
+    auto chunks = getParallelChunks(width, height, numThreads);
+    if (chunks.size() <= 1) {
+        return processImage(lut, data, width, height, layout, interp);
+    }
+    // Reuse per-chunk single-pass dispatch
+#if defined(CUBELUT_HAS_GCD)
+    dispatch_apply(chunks.size(),
+        dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+        ^(size_t ci) {
+            // Re-entry: slice the flat data buffer for this chunk's pixel range
+            const auto& c = chunks[ci];
+            size_t stride = (layout==PixelLayout::BGRA_F32||layout==PixelLayout::RGBA_F32) ? 4 : 3;
+            // Build a temp view: shift pointer, process as full-width=chunk, height=1
+            float* ptr = data + c.startPixel * stride;
+            processImage(lut, ptr, c.endPixel - c.startPixel, 1, layout, interp);
+        });
+#else
+    std::vector<std::future<void>> futs;
+    futs.reserve(chunks.size());
+    for (const auto& c : chunks) {
+        futs.push_back(std::async(std::launch::async, [&, c] {
+            size_t stride = (layout==PixelLayout::BGRA_F32||layout==PixelLayout::RGBA_F32) ? 4 : 3;
+            float* ptr = data + c.startPixel * stride;
+            processImage(lut, ptr, c.endPixel - c.startPixel, 1, layout, interp);
+        }));
+    }
+    for (auto& f : futs) f.get();
+#endif
 }
 
 void Processor::convertRGBToRGBA16(const float* rgb, uint16_t* rgba16, size_t numPixels) {

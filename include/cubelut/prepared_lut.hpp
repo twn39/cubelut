@@ -60,7 +60,18 @@ public:
     void processImage(float* data, size_t width, size_t height,
                       Interpolation interp = Interpolation::Tetrahedral) const;
 
+    /// Apply LUT to a float32 image with arbitrary layout (single-pass SIMD).
+    void processImage(float* data, size_t width, size_t height,
+                      PixelLayout layout,
+                      Interpolation interp = Interpolation::Tetrahedral) const;
+
     void processImageParallel(float* data, size_t width, size_t height,
+                              Interpolation interp     = Interpolation::Tetrahedral,
+                              unsigned      numThreads = 0) const;
+
+    /// Parallel layout-aware version.
+    void processImageParallel(float* data, size_t width, size_t height,
+                              PixelLayout   layout,
                               Interpolation interp     = Interpolation::Tetrahedral,
                               unsigned      numThreads = 0) const;
 

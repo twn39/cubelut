@@ -286,6 +286,42 @@ void cubelut_process_image_rgba8_parallel(
     unsigned num_threads
 );
 
+// ============================================================================
+// float32 PixelLayout API (single-pass SIMD, zero temp buffer)
+// ============================================================================
+
+/// Pixel memory layout for float32 image buffers.
+typedef enum {
+    CUBELUT_LAYOUT_RGB_F32  = 0, ///< 3×float32/pixel [R,G,B]
+    CUBELUT_LAYOUT_RGBA_F32 = 1, ///< 4×float32/pixel [R,G,B,A] — alpha passthrough
+    CUBELUT_LAYOUT_BGR_F32  = 2, ///< 3×float32/pixel [B,G,R]   — OpenCV default
+    CUBELUT_LAYOUT_BGRA_F32 = 3, ///< 4×float32/pixel [B,G,R,A] — Metal BGRA32Float
+} cubelut_layout_t;
+
+/// Apply LUT to a float32 image with the given pixel layout (in-place).
+/// Alpha channel is always passed through unchanged.
+/// Dispatches the optimal SIMD kernel for the host CPU automatically.
+void cubelut_process_image_ex(
+    const cubelut_lut_t* lut,
+    float*               data,
+    size_t               width,
+    size_t               height,
+    cubelut_layout_t     layout,
+    bool                 use_tetrahedral
+);
+
+/// Parallel version of cubelut_process_image_ex.
+/// num_threads: 0 = hardware_concurrency()
+void cubelut_process_image_ex_parallel(
+    const cubelut_lut_t* lut,
+    float*               data,
+    size_t               width,
+    size_t               height,
+    cubelut_layout_t     layout,
+    bool                 use_tetrahedral,
+    unsigned             num_threads
+);
+
 #ifdef __cplusplus
 }
 #endif

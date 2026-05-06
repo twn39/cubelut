@@ -12,6 +12,15 @@ enum class Interpolation {
     Tetrahedral
 };
 
+/// Describes the pixel memory layout of a float32 image buffer.
+/// Used to select the correct single-pass SIMD kernel.
+enum class PixelLayout : uint8_t {
+    RGB_F32  = 0, ///< 3×float32/pixel [R,G,B]                  (default)
+    RGBA_F32 = 1, ///< 4×float32/pixel [R,G,B,A] alpha passthrough
+    BGR_F32  = 2, ///< 3×float32/pixel [B,G,R]  (OpenCV default)
+    BGRA_F32 = 3, ///< 4×float32/pixel [B,G,R,A] (Metal MTLPixelFormatBGRA)
+};
+
 class Processor {
 public:
     // Apply LUT to a single pixel (RGB in range [0, 1])
@@ -23,9 +32,26 @@ public:
     static void processPixels(const Lut& lut, float* data, size_t startIndex, size_t endIndex, Interpolation interp = Interpolation::Tetrahedral);
 
     // Apply LUT to an entire image in-place (RGB format, floats). Helper wrapper.
-    static void processImage(const Lut& lut, float* data, size_t width, size_t height, Interpolation interp = Interpolation::Tetrahedral) {
+    static void processImage(const Lut& lut, float* data, size_t width, size_t height,
+                             Interpolation interp = Interpolation::Tetrahedral) {
         processPixels(lut, data, 0, width * height, interp);
     }
+
+    /// Apply LUT to a float32 image with arbitrary pixel layout (single-pass SIMD).
+    /// Supported layouts: RGB_F32, RGBA_F32, BGRA_F32.
+    /// Alpha channel is always passed through unchanged (never modified).
+    /// input == output is safe.
+    static void processImage(const Lut& lut, float* data,
+                             size_t width, size_t height,
+                             PixelLayout layout,
+                             Interpolation interp = Interpolation::Tetrahedral);
+
+    /// Parallel version of processImage(PixelLayout).
+    static void processImageParallel(const Lut& lut, float* data,
+                                     size_t width, size_t height,
+                                     PixelLayout layout,
+                                     Interpolation interp     = Interpolation::Tetrahedral,
+                                     unsigned      numThreads = 0);
 
     // ------------------------------------------------------------------
     // Parallel processing

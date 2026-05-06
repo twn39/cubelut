@@ -284,4 +284,71 @@ static void BM_ProcessImage_RGBA8_4K(benchmark::State& state) {
 }
 BENCHMARK(BM_ProcessImage_RGBA8_4K)->Unit(benchmark::kMillisecond);
 
+// ---------------------------------------------------------
+// float32 PixelLayout benchmarks (single-pass SIMD, zero temp buffer)
+// Compare against BM_ProcessImage_Tetrahedral_4K (~40ms RGB baseline)
+// ---------------------------------------------------------
+
+static std::vector<float> make_rgba_f32_4k() {
+    SetupBenchmark();
+    const size_t px = 3840 * 2160;
+    std::vector<float> img(px * 4);
+    for (size_t i = 0; i < px; ++i) {
+        img[i*4+0] = cached_img_4k[i*3+0];
+        img[i*4+1] = cached_img_4k[i*3+1];
+        img[i*4+2] = cached_img_4k[i*3+2];
+        img[i*4+3] = 1.0f;
+    }
+    return img;
+}
+
+// float32 RGBA single-thread (single-pass SIMD, no temp buffer)
+static void BM_ProcessImage_RGBA_F32_4K(benchmark::State& state) {
+    auto img = make_rgba_f32_4k();
+    for (auto _ : state) {
+        cubelut::Processor::processImage(
+            *cached_lut_33, img.data(), 3840, 2160,
+            cubelut::PixelLayout::RGBA_F32);
+        benchmark::DoNotOptimize(img.data());
+    }
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 3840.0 * 2160.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_ProcessImage_RGBA_F32_4K)->Unit(benchmark::kMillisecond);
+
+// float32 BGRA single-thread (Metal MTLPixelFormatBGRA32Float layout)
+static void BM_ProcessImage_BGRA_F32_4K(benchmark::State& state) {
+    auto img = make_rgba_f32_4k();
+    // Reinterpret as BGRA by swapping R↔B (for benchmark purposes)
+    const size_t px = 3840 * 2160;
+    for (size_t i = 0; i < px; ++i) std::swap(img[i*4+0], img[i*4+2]);
+    for (auto _ : state) {
+        cubelut::Processor::processImage(
+            *cached_lut_33, img.data(), 3840, 2160,
+            cubelut::PixelLayout::BGRA_F32);
+        benchmark::DoNotOptimize(img.data());
+    }
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 3840.0 * 2160.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_ProcessImage_BGRA_F32_4K)->Unit(benchmark::kMillisecond);
+
+// float32 RGBA parallel (GCD / std::async)
+static void BM_ProcessImage_RGBA_F32_Parallel_4K(benchmark::State& state) {
+    auto img = make_rgba_f32_4k();
+    for (auto _ : state) {
+        cubelut::Processor::processImageParallel(
+            *cached_lut_33, img.data(), 3840, 2160,
+            cubelut::PixelLayout::RGBA_F32);
+        benchmark::DoNotOptimize(img.data());
+    }
+    state.counters["Threads"] = std::thread::hardware_concurrency();
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 3840.0 * 2160.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_ProcessImage_RGBA_F32_Parallel_4K)->Unit(benchmark::kMillisecond);
+
 BENCHMARK_MAIN();

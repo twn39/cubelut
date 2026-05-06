@@ -69,6 +69,19 @@ void PreparedLut::processImageParallel(float* data, size_t width, size_t height,
     Processor::processImageParallel(*source_lut_, data, width, height, interp, numThreads);
 }
 
+void PreparedLut::processImage(float* data, size_t width, size_t height,
+                                PixelLayout layout, Interpolation interp) const {
+    if (!valid_) return;
+    Processor::processImage(*source_lut_, data, width, height, layout, interp);
+}
+
+void PreparedLut::processImageParallel(float* data, size_t width, size_t height,
+                                        PixelLayout layout, Interpolation interp,
+                                        unsigned numThreads) const {
+    if (!valid_) return;
+    Processor::processImageParallel(*source_lut_, data, width, height, layout, interp, numThreads);
+}
+
 // ----------------------------------------------------------------------------
 // uint8 path – uses precomputed coordinate tables for domain normalization.
 // The chunk-reuse loop (ConvertRGB8ToF32 → processPixels → ConvertF32ToRGB8)

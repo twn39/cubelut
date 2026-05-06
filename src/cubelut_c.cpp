@@ -285,4 +285,39 @@ void cubelut_process_image_rgba8_parallel(
         lut->inner, input, output, width, height, interp, num_threads);
 }
 
+// ── PixelLayout C API ─────────────────────────────────────────────────────────
+
+static cubelut::PixelLayout to_pixel_layout(cubelut_layout_t l) {
+    switch (l) {
+    case CUBELUT_LAYOUT_RGBA_F32: return cubelut::PixelLayout::RGBA_F32;
+    case CUBELUT_LAYOUT_BGR_F32:  return cubelut::PixelLayout::BGR_F32;
+    case CUBELUT_LAYOUT_BGRA_F32: return cubelut::PixelLayout::BGRA_F32;
+    default:                      return cubelut::PixelLayout::RGB_F32;
+    }
+}
+
+void cubelut_process_image_ex(
+    const cubelut_lut_t* lut, float* data,
+    size_t width, size_t height,
+    cubelut_layout_t layout, bool use_tetrahedral)
+{
+    if (!lut || !data) return;
+    const auto interp = use_tetrahedral
+        ? cubelut::Interpolation::Tetrahedral : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processImage(lut->inner, data, width, height,
+                                     to_pixel_layout(layout), interp);
+}
+
+void cubelut_process_image_ex_parallel(
+    const cubelut_lut_t* lut, float* data,
+    size_t width, size_t height,
+    cubelut_layout_t layout, bool use_tetrahedral, unsigned num_threads)
+{
+    if (!lut || !data) return;
+    const auto interp = use_tetrahedral
+        ? cubelut::Interpolation::Tetrahedral : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processImageParallel(lut->inner, data, width, height,
+                                              to_pixel_layout(layout), interp, num_threads);
+}
+
 } // extern "C"
