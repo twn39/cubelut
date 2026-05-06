@@ -85,7 +85,22 @@ ParseResult Parser::parseString(std::string_view content) {
         if (p == end) break;
 
         if (*p == '\n') { p++; continue; }
-        if (*p == '#')  { skip_line(); continue; }
+        if (*p == '#') {
+            p++;  // skip '#'
+            // Strip at most one leading space ("# text" → "text", "#text" → "text")
+            if (p < end && *p == ' ') p++;
+            // Collect to end of line
+            const char* start = p;
+            while (p < end && *p != '\n' && *p != '\r') p++;
+            std::string text(start, p - start);
+            // Strip trailing whitespace
+            while (!text.empty() && (text.back() == ' ' || text.back() == '\t'))
+                text.pop_back();
+            lut.comments.push_back(std::move(text));
+            skip_line();
+            continue;
+        }
+
 
         // ---- Data line (starts with digit / sign / dot) ---------------------
         if (*p == '-' || *p == '+' || *p == '.' || (*p >= '0' && *p <= '9')) {

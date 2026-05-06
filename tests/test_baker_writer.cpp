@@ -9,7 +9,7 @@
 //  - Writer::toString format (keywords, data count, precision)
 //  - Writer roundtrip: toString → Parser::parseString → data equality
 //  - Writer domain: default suppressed, non-default emitted
-//  - WriteOptions: precision, comments, generator comment toggle
+//  - WriteOptions: precision, preserveComments, generator comment toggle
 //  - Writer::toFile error paths (invalid LUT, bad path)
 //  - Baker + Writer combined workflow: bake two LUTs → write → re-parse
 //  - C API: cubelut_write_to_file, cubelut_write_to_string,
@@ -254,13 +254,76 @@ void test_writer_generator_comment_suppressed() {
 }
 
 void test_writer_custom_comments() {
+    // Comments are now set on the Lut itself, not WriteOptions.
     auto lut = make_identity_2x3d();
-    cubelut::WriteOptions opts;
-    opts.comments = {"Author: Test", "Version: 1.0"};
-    std::string text = cubelut::Writer::toString(lut, opts);
+    lut.comments = {"Author: Test", "Version: 1.0"};
+    std::string text = cubelut::Writer::toString(lut);
     assert(text.find("# Author: Test") != std::string::npos);
     assert(text.find("# Version: 1.0") != std::string::npos);
     std::cout << "test_writer_custom_comments passed\n";
+}
+
+void test_writer_comment_blank_line() {
+    // Empty string element → blank comment line "#"
+    auto lut = make_identity_2x3d();
+    lut.comments = {"Section A", "", "Section B"};
+    std::string text = cubelut::Writer::toString(lut);
+    assert(text.find("# Section A") != std::string::npos);
+    assert(text.find("# Section B") != std::string::npos);
+    // blank comment line must appear as "#\n" (not "# \n")
+    assert(text.find("#\n") != std::string::npos);
+    std::cout << "test_writer_comment_blank_line passed\n";
+}
+
+void test_writer_preserve_comments_false() {
+    // preserveComments=false strips lut.comments from output
+    auto lut = make_identity_2x3d();
+    lut.comments = {"Author: Test", "Grade: Warm"};
+    cubelut::WriteOptions opts;
+    opts.preserveComments = false;
+    std::string text = cubelut::Writer::toString(lut, opts);
+    assert(text.find("# Author") == std::string::npos);
+    assert(text.find("# Grade")  == std::string::npos);
+    // Tool watermark still present
+    assert(text.find("# Created by cubelut") != std::string::npos);
+    std::cout << "test_writer_preserve_comments_false passed\n";
+}
+
+void test_comment_roundtrip() {
+    // Parse .cube with comments → write → re-parse → comments preserved
+    const char* cube_src =
+        "# Author: colorist@studio.com\n"
+        "# Grade: Warm Summer\n"
+        "#\n"
+        "# Input: Rec.709\n"
+        "TITLE \"Summer\"\n"
+        "LUT_3D_SIZE 2\n"
+        "0 0 0\n1 0 0\n0 1 0\n1 1 0\n"
+        "0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+
+    auto lut = cubelut::Parser::fromString(cube_src);
+    assert(lut.has_value());
+    assert(lut->comments.size() == 4u);
+    assert(lut->comments[0] == "Author: colorist@studio.com");
+    assert(lut->comments[1] == "Grade: Warm Summer");
+    assert(lut->comments[2] == "");               // blank line
+    assert(lut->comments[3] == "Input: Rec.709");
+    assert(lut->title == "Summer");
+
+    // Write and re-parse: comments must survive
+    cubelut::WriteOptions opts;
+    opts.writeGeneratorComment = false;  // avoid prepending extra comment
+    std::string text = cubelut::Writer::toString(*lut, opts);
+
+    auto reparsed = cubelut::Parser::fromString(text);
+    assert(reparsed.has_value());
+    assert(reparsed->comments.size() == 4u);
+    assert(reparsed->comments[0] == "Author: colorist@studio.com");
+    assert(reparsed->comments[1] == "Grade: Warm Summer");
+    assert(reparsed->comments[2] == "");
+    assert(reparsed->comments[3] == "Input: Rec.709");
+    assert(reparsed->title == "Summer");
+    std::cout << "test_comment_roundtrip passed\n";
 }
 
 void test_writer_domain_default_not_written() {
@@ -514,6 +577,9 @@ int main() {
     test_writer_precision_option();
     test_writer_generator_comment_suppressed();
     test_writer_custom_comments();
+    test_writer_comment_blank_line();
+    test_writer_preserve_comments_false();
+    test_comment_roundtrip();
     test_writer_domain_default_not_written();
     test_writer_domain_nondefault_written();
     test_writer_domain_option_suppress();

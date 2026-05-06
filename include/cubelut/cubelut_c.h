@@ -322,6 +322,25 @@ void cubelut_process_image_ex_parallel(
     unsigned             num_threads
 );
 
+// ============================================================================
+// Comment API
+// ============================================================================
+
+/// Returns the number of comment lines stored in the LUT.
+size_t cubelut_get_comment_count(const cubelut_lut_t* lut);
+
+/// Returns the i-th comment line WITHOUT the leading "# " prefix.
+/// Returns NULL if lut is NULL or index is out of range.
+/// The returned pointer is valid until the LUT is freed or comments are modified.
+const char* cubelut_get_comment(const cubelut_lut_t* lut, size_t index);
+
+/// Appends one comment line to the LUT (without the "# " prefix).
+/// An empty string appends a blank comment line.
+void cubelut_add_comment(cubelut_lut_t* lut, const char* text);
+
+/// Removes all comment lines from the LUT.
+void cubelut_clear_comments(cubelut_lut_t* lut);
+
 #ifdef __cplusplus
 }
 #endif

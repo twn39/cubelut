@@ -75,14 +75,20 @@ WriteError Writer::toStream(const Lut& lut,
     os.precision(opts.precision);
 
     // ── Comment block (must precede all header directives per Resolve spec) ──
+    // Order: tool watermark first, then lut.comments (content metadata).
+    // A blank line separates the comment block from the first header directive.
+    const bool hasComments = opts.preserveComments && !lut.comments.empty();
     if (opts.writeGeneratorComment) {
         os << "# Created by cubelut\n";
     }
-    for (const auto& c : opts.comments) {
-        os << "# " << c << '\n';
+    if (hasComments) {
+        for (const auto& c : lut.comments) {
+            if (c.empty()) os << "#\n";   // blank comment line → "#"
+            else           os << "# " << c << '\n';
+        }
     }
-    if (opts.writeGeneratorComment || !opts.comments.empty()) {
-        os << '\n';
+    if (opts.writeGeneratorComment || hasComments) {
+        os << '\n';  // blank line between comment block and header directives
     }
 
     // ── TITLE ────────────────────────────────────────────────────────────────

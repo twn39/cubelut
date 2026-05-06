@@ -320,4 +320,26 @@ void cubelut_process_image_ex_parallel(
                                               to_pixel_layout(layout), interp, num_threads);
 }
 
+// ── Comment API ───────────────────────────────────────────────────────────────
+
+size_t cubelut_get_comment_count(const cubelut_lut_t* lut) {
+    if (!lut) return 0;
+    return lut->inner.comments.size();
+}
+
+const char* cubelut_get_comment(const cubelut_lut_t* lut, size_t index) {
+    if (!lut || index >= lut->inner.comments.size()) return nullptr;
+    return lut->inner.comments[index].c_str();
+}
+
+void cubelut_add_comment(cubelut_lut_t* lut, const char* text) {
+    if (!lut) return;
+    lut->inner.comments.push_back(text ? std::string(text) : std::string{});
+}
+
+void cubelut_clear_comments(cubelut_lut_t* lut) {
+    if (!lut) return;
+    lut->inner.comments.clear();
+}
+
 } // extern "C"

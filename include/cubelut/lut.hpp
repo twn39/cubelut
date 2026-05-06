@@ -34,7 +34,11 @@ struct LutData3D {
 
 struct Lut {
     std::string title;
-    
+    /// Comment lines preserved from parsing or set programmatically.
+    /// Each element is one comment line WITHOUT the leading "# " prefix.
+    /// An empty string represents a blank comment line (written as "#").
+    std::vector<std::string> comments;
+
     std::optional<LutData1D> shaper1D;
     std::optional<LutData3D> grid3D;
 

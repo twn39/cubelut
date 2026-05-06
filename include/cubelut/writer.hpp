@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <vector>
 #include <ostream>
 #include "lut.hpp"
 
@@ -19,11 +18,14 @@ struct WriteOptions {
     /// Set to false to suppress domain directives unconditionally.
     bool writeDomainIfNonDefault = true;
 
-    /// Prepend a "# Created by cubelut" comment line.
+    /// Prepend a "# Created by cubelut" comment line (tool watermark).
+    /// This is the only write-time comment; it identifies the generating tool,
+    /// not the LUT content itself.
     bool writeGeneratorComment = true;
 
-    /// Extra comment lines written verbatim as "# <text>".
-    std::vector<std::string> comments;
+    /// When true (default), emit all lines from lut.comments verbatim.
+    /// Set to false for "clean" output: only the tool watermark is written.
+    bool preserveComments = true;
 };
 
 // ---------------------------------------------------------------------------
@@ -58,11 +60,17 @@ struct WriteResult {
 // std::ostream. toFile() and toString() are thin wrappers on top of it.
 //
 // Usage:
-//   // Simple write
+//   // Simple write (preserves all comments from parsing)
 //   auto r = cubelut::Writer::toFile(lut, "output.cube");
 //   if (!r) std::cerr << r.errorMessage << "\n";
 //
-//   // In-memory string (useful in tests)
+//   // Clean output (strip inherited comments, keep tool watermark only)
+//   cubelut::WriteOptions opts;
+//   opts.preserveComments = false;
+//   auto r = cubelut::Writer::toFile(lut, "clean.cube", opts);
+//
+//   // Add programmatic comments before writing
+//   lut.comments.push_back("Author: colorist@studio.com");
 //   std::string text = cubelut::Writer::toString(lut);
 //
 //   // Custom stream
