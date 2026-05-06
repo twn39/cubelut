@@ -21,4 +21,14 @@ void Pipeline::processPixels(float* data, size_t startIndex, size_t endIndex) co
     }
 }
 
+void Pipeline::processImageParallel(float* data, size_t width, size_t height,
+                                    unsigned numThreads) const {
+    if (!data) return;
+    // Stages are applied sequentially (inter-stage data dependency cannot be parallelized).
+    // Pixels WITHIN each stage are processed in parallel via platform-adaptive dispatch.
+    for (const auto& s : stages_) {
+        Processor::processImageParallel(s.lut, data, width, height, s.interp, numThreads);
+    }
+}
+
 } // namespace cubelut

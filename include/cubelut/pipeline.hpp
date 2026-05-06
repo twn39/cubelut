@@ -79,6 +79,12 @@ public:
         processPixels(data, 0, width * height);
     }
 
+    /// Parallel image processing (platform-adaptive: GCD on Apple, std::async elsewhere).
+    /// Stages are applied sequentially; pixels within each stage are processed in parallel.
+    /// numThreads: 0 = hardware_concurrency()
+    void processImageParallel(float* data, size_t width, size_t height,
+                              unsigned numThreads = 0) const;
+
 private:
     std::vector<Stage> stages_;
 };

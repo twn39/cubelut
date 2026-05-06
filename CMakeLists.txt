@@ -40,6 +40,9 @@ add_library(cubelut
     src/processor.cpp
     src/pipeline.cpp
     src/cubelut_c.cpp
+    src/baker.cpp
+    src/writer.cpp
+    src/prepared_lut.cpp
 )
 
 target_include_directories(cubelut
@@ -85,3 +88,7 @@ add_test(NAME parser_test COMMAND cubelut_parser_test)
 add_executable(cubelut_c_api_test tests/test_c_api.c)
 target_link_libraries(cubelut_c_api_test PRIVATE cubelut)
 add_test(NAME c_api_test COMMAND cubelut_c_api_test)
+
+add_executable(cubelut_baker_writer_test tests/test_baker_writer.cpp)
+target_link_libraries(cubelut_baker_writer_test PRIVATE cubelut)
+add_test(NAME baker_writer_test COMMAND cubelut_baker_writer_test)

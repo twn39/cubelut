@@ -2,6 +2,8 @@
 #include "cubelut/parser.hpp"
 #include "cubelut/processor.hpp"
 #include "cubelut/lut.hpp"
+#include "cubelut/baker.hpp"
+#include "cubelut/writer.hpp"
 #include <cstring>
 #include <optional>
 #include <string>
@@ -151,6 +153,136 @@ bool cubelut_get_shaper1d_domain(const cubelut_lut_t* lut,
     assign_if(min_r, dom.min[0]); assign_if(min_g, dom.min[1]); assign_if(min_b, dom.min[2]);
     assign_if(max_r, dom.max[0]); assign_if(max_g, dom.max[1]); assign_if(max_b, dom.max[2]);
     return true;
+}
+
+} // extern "C"
+
+// ============================================================================
+// Writer C API implementation
+// ============================================================================
+
+extern "C" {
+
+bool cubelut_write_to_file(const cubelut_lut_t* lut, const char* file_path) {
+    if (!lut || !file_path) return false;
+    return cubelut::Writer::toFile(lut->inner, file_path).ok();
+}
+
+char* cubelut_write_to_string(const cubelut_lut_t* lut) {
+    if (!lut) return nullptr;
+    std::string s = cubelut::Writer::toString(lut->inner);
+    if (s.empty()) return nullptr;
+    // Allocated with new char[] — caller frees via cubelut_free_buffer()
+    char* buf = new char[s.size() + 1];
+    std::memcpy(buf, s.data(), s.size() + 1);
+    return buf;
+}
+
+// ============================================================================
+// Baker C API implementation
+// ============================================================================
+
+float* cubelut_bake_identity_grid3d(int size, size_t* out_num_floats) {
+    if (size < 2) return nullptr;
+    cubelut::LutData3D grid = cubelut::Baker::makeIdentity3D(size);
+    const size_t n = grid.data.size();
+    if (out_num_floats) *out_num_floats = n;
+    float* buf = new float[n];
+    std::memcpy(buf, grid.data.data(), n * sizeof(float));
+    return buf;
+}
+
+// ============================================================================
+// Parallel Processing C API implementation
+// ============================================================================
+
+cubelut_pixel_chunk_t* cubelut_get_parallel_chunks(
+    size_t width, size_t height, unsigned num_threads, size_t* out_count)
+{
+    auto chunks = cubelut::Processor::getParallelChunks(width, height, num_threads);
+    if (chunks.empty()) {
+        if (out_count) *out_count = 0;
+        return nullptr;
+    }
+    const size_t n = chunks.size();
+    if (out_count) *out_count = n;
+    auto* buf = new cubelut_pixel_chunk_t[n];
+    for (size_t i = 0; i < n; ++i) {
+        buf[i].start_pixel = chunks[i].startPixel;
+        buf[i].end_pixel   = chunks[i].endPixel;
+    }
+    return buf;  // Caller frees with cubelut_free_buffer()
+}
+
+void cubelut_process_pixels(
+    const cubelut_lut_t* lut, float* data,
+    size_t start_pixel, size_t end_pixel, bool use_tetrahedral)
+{
+    if (!lut || !data) return;
+    const auto interp = use_tetrahedral
+        ? cubelut::Interpolation::Tetrahedral
+        : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processPixels(lut->inner, data, start_pixel, end_pixel, interp);
+}
+
+void cubelut_process_image_parallel(
+    const cubelut_lut_t* lut, float* data,
+    size_t width, size_t height, bool use_tetrahedral, unsigned num_threads)
+{
+    if (!lut || !data) return;
+    const auto interp = use_tetrahedral
+        ? cubelut::Interpolation::Tetrahedral
+        : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processImageParallel(
+        lut->inner, data, width, height, interp, num_threads);
+}
+
+// ── uint8 C API ───────────────────────────────────────────────────────────────
+
+void cubelut_process_image_u8(
+    const cubelut_lut_t* lut, const uint8_t* input, uint8_t* output,
+    size_t width, size_t height, bool use_tetrahedral)
+{
+    if (!lut || !input || !output) return;
+    const auto interp = use_tetrahedral
+        ? cubelut::Interpolation::Tetrahedral
+        : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processImageU8(lut->inner, input, output, width, height, interp);
+}
+
+void cubelut_process_image_u8_parallel(
+    const cubelut_lut_t* lut, const uint8_t* input, uint8_t* output,
+    size_t width, size_t height, bool use_tetrahedral, unsigned num_threads)
+{
+    if (!lut || !input || !output) return;
+    const auto interp = use_tetrahedral
+        ? cubelut::Interpolation::Tetrahedral
+        : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processImageU8Parallel(
+        lut->inner, input, output, width, height, interp, num_threads);
+}
+
+void cubelut_process_image_rgba8(
+    const cubelut_lut_t* lut, const uint8_t* input, uint8_t* output,
+    size_t width, size_t height, bool use_tetrahedral)
+{
+    if (!lut || !input || !output) return;
+    const auto interp = use_tetrahedral
+        ? cubelut::Interpolation::Tetrahedral
+        : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processImageRGBA8(lut->inner, input, output, width, height, interp);
+}
+
+void cubelut_process_image_rgba8_parallel(
+    const cubelut_lut_t* lut, const uint8_t* input, uint8_t* output,
+    size_t width, size_t height, bool use_tetrahedral, unsigned num_threads)
+{
+    if (!lut || !input || !output) return;
+    const auto interp = use_tetrahedral
+        ? cubelut::Interpolation::Tetrahedral
+        : cubelut::Interpolation::Trilinear;
+    cubelut::Processor::processImageRGBA8Parallel(
+        lut->inner, input, output, width, height, interp, num_threads);
 }
 
 } // extern "C"

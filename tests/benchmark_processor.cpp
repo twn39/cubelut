@@ -2,6 +2,7 @@
 #include <vector>
 #include <random>
 #include <iostream>
+#include <thread>
 #include "cubelut/parser.hpp"
 #include "cubelut/processor.hpp"
 #include "cubelut/cubelut_c.h"
@@ -21,8 +22,10 @@ static std::vector<float> generate_random_image(size_t width, size_t height) {
 
 // Global cached resources to prevent reloading files for each iteration
 static std::optional<cubelut::Lut> cached_lut_33;
-static std::vector<float> cached_img_1080p;
-static std::vector<float> cached_img_4k;
+static std::vector<float>    cached_img_1080p;
+static std::vector<float>    cached_img_4k;
+static std::vector<uint8_t>  cached_img_u8_4k;    // uint8 RGB 4K
+static std::vector<uint8_t>  cached_img_rgba8_4k;  // uint8 RGBA 4K
 static cubelut_lut_t* cached_c_lut = nullptr;
 
 static void SetupBenchmark() {
@@ -35,7 +38,21 @@ static void SetupBenchmark() {
         cached_c_lut = cubelut_load_from_file("../tests/files/FLog2C_to_ACROS_33grid_V.1.00.cube");
         
         cached_img_1080p = generate_random_image(1920, 1080);
-        cached_img_4k = generate_random_image(3840, 2160);
+        cached_img_4k    = generate_random_image(3840, 2160);
+
+        // Build uint8 equivalents (float → uint8 via truncation)
+        const size_t px4k = 3840 * 2160;
+        cached_img_u8_4k.resize(px4k * 3);
+        cached_img_rgba8_4k.resize(px4k * 4);
+        for (size_t i = 0; i < px4k; ++i) {
+            cached_img_u8_4k[i*3+0] = static_cast<uint8_t>(cached_img_4k[i*3+0]*255);
+            cached_img_u8_4k[i*3+1] = static_cast<uint8_t>(cached_img_4k[i*3+1]*255);
+            cached_img_u8_4k[i*3+2] = static_cast<uint8_t>(cached_img_4k[i*3+2]*255);
+            cached_img_rgba8_4k[i*4+0] = cached_img_u8_4k[i*3+0];
+            cached_img_rgba8_4k[i*4+1] = cached_img_u8_4k[i*3+1];
+            cached_img_rgba8_4k[i*4+2] = cached_img_u8_4k[i*3+2];
+            cached_img_rgba8_4k[i*4+3] = 255;
+        }
     }
 }
 
@@ -130,5 +147,141 @@ static void BM_C_API_Export_RGBA16(benchmark::State& state) {
     }
 }
 BENCHMARK(BM_C_API_Export_RGBA16)->Unit(benchmark::kMicrosecond);
+
+// ---------------------------------------------------------
+// Parallel Processing Benchmarks
+// ---------------------------------------------------------
+
+// Scaling curve: 1/2/4/8/10 threads on 4K image
+static void BM_ProcessImage_Parallel_4K(benchmark::State& state) {
+    SetupBenchmark();
+    const unsigned NT = static_cast<unsigned>(state.range(0));
+    std::vector<float> img = cached_img_4k;
+    for (auto _ : state) {
+        cubelut::Processor::processImageParallel(
+            *cached_lut_33, img.data(), 3840, 2160,
+            cubelut::Interpolation::Tetrahedral, NT);
+        benchmark::DoNotOptimize(img.data());
+    }
+    const double mpx = 3840.0 * 2160.0 / 1e6;
+    state.counters["Threads"]        = NT;
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * mpx * 1e6,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+// Thread scaling: 1 thread (== processImage baseline), 2, 4, 8, 10 (all cores)
+BENCHMARK(BM_ProcessImage_Parallel_4K)
+    ->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(10)
+    ->Unit(benchmark::kMillisecond);
+
+// Auto-thread (hardware_concurrency) convenience benchmark
+static void BM_ProcessImage_Parallel_4K_Auto(benchmark::State& state) {
+    SetupBenchmark();
+    std::vector<float> img = cached_img_4k;
+    for (auto _ : state) {
+        cubelut::Processor::processImageParallel(
+            *cached_lut_33, img.data(), 3840, 2160);
+        benchmark::DoNotOptimize(img.data());
+    }
+    state.counters["Threads"]        = std::thread::hardware_concurrency();
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 3840.0 * 2160.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_ProcessImage_Parallel_4K_Auto)->Unit(benchmark::kMillisecond);
+
+// 1080p auto-parallel (baseline was 11ms, target < 3ms)
+static void BM_ProcessImage_Parallel_1080p_Auto(benchmark::State& state) {
+    SetupBenchmark();
+    std::vector<float> img = cached_img_1080p;
+    for (auto _ : state) {
+        cubelut::Processor::processImageParallel(
+            *cached_lut_33, img.data(), 1920, 1080);
+        benchmark::DoNotOptimize(img.data());
+    }
+    state.counters["Threads"]        = std::thread::hardware_concurrency();
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 1920.0 * 1080.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_ProcessImage_Parallel_1080p_Auto)->Unit(benchmark::kMillisecond);
+
+// getParallelChunks overhead (should be < 5 µs)
+static void BM_GetParallelChunks(benchmark::State& state) {
+    for (auto _ : state) {
+        auto chunks = cubelut::Processor::getParallelChunks(3840, 2160, 0);
+        benchmark::DoNotOptimize(chunks.data());
+    }
+}
+BENCHMARK(BM_GetParallelChunks)->Unit(benchmark::kMicrosecond);
+
+// C API: cubelut_process_image_parallel
+static void BM_C_API_Parallel_4K(benchmark::State& state) {
+    SetupBenchmark();
+    const unsigned NT = static_cast<unsigned>(state.range(0));
+    std::vector<float> img = cached_img_4k;
+    for (auto _ : state) {
+        cubelut_process_image_parallel(cached_c_lut, img.data(), 3840, 2160, true, NT);
+        benchmark::DoNotOptimize(img.data());
+    }
+    state.counters["Threads"]        = NT;
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 3840.0 * 2160.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_C_API_Parallel_4K)->Arg(0)->Arg(8)->Unit(benchmark::kMillisecond);
+
+// ---------------------------------------------------------
+// uint8 Processing Benchmarks (vs float32 baseline)
+// ---------------------------------------------------------
+
+// Single-thread uint8 RGB 4K (compare against BM_ProcessImage_Tetrahedral_4K ~40ms)
+static void BM_ProcessImage_U8_4K(benchmark::State& state) {
+    SetupBenchmark();
+    std::vector<uint8_t> img = cached_img_u8_4k;
+    std::vector<uint8_t> out(img.size());
+    for (auto _ : state) {
+        cubelut::Processor::processImageU8(
+            *cached_lut_33, img.data(), out.data(), 3840, 2160);
+        benchmark::DoNotOptimize(out.data());
+    }
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 3840.0 * 2160.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_ProcessImage_U8_4K)->Unit(benchmark::kMillisecond);
+
+// Parallel uint8 RGB 4K (auto-thread)
+static void BM_ProcessImage_U8_Parallel_4K(benchmark::State& state) {
+    SetupBenchmark();
+    std::vector<uint8_t> img = cached_img_u8_4k;
+    std::vector<uint8_t> out(img.size());
+    for (auto _ : state) {
+        cubelut::Processor::processImageU8Parallel(
+            *cached_lut_33, img.data(), out.data(), 3840, 2160);
+        benchmark::DoNotOptimize(out.data());
+    }
+    state.counters["Threads"] = std::thread::hardware_concurrency();
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 3840.0 * 2160.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_ProcessImage_U8_Parallel_4K)->Unit(benchmark::kMillisecond);
+
+// RGBA8 4K (compare against RGB8)
+static void BM_ProcessImage_RGBA8_4K(benchmark::State& state) {
+    SetupBenchmark();
+    std::vector<uint8_t> img = cached_img_rgba8_4k;
+    std::vector<uint8_t> out(img.size());
+    for (auto _ : state) {
+        cubelut::Processor::processImageRGBA8(
+            *cached_lut_33, img.data(), out.data(), 3840, 2160);
+        benchmark::DoNotOptimize(out.data());
+    }
+    state.counters["Megapixels/sec"] =
+        benchmark::Counter(state.iterations() * 3840.0 * 2160.0,
+                           benchmark::Counter::kIsRate) / 1e6;
+}
+BENCHMARK(BM_ProcessImage_RGBA8_4K)->Unit(benchmark::kMillisecond);
 
 BENCHMARK_MAIN();
