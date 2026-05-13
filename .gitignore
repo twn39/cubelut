@@ -68,3 +68,5 @@ output_*.png
 output_*.jpg
 output_*.jpeg
 diff.png
+
+build_ios
