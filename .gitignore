@@ -70,3 +70,5 @@ output_*.jpeg
 diff.png
 
 build_ios
+build_ios_sim
+build_mac

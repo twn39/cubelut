@@ -151,19 +151,23 @@ size_t ProcessPixels3DSIMD_Tetrahedral_Bulk(const LutData3D& lut, float* data, s
         auto x0 = hn::Max(rg_max, d_b);
         auto x1 = hn::Min(rg_max, mid);
 
-        // Boolean masks to find ca and cb path nodes
-        auto gt_r_f = hn::Gt(d_r, d_g);
-        auto gt_g_f = hn::Gt(d_g, d_b);
-        auto gt_b_f = hn::Gt(d_b, d_r);
+        // Boolean masks to find ca and cb path nodes.
+        // Use Ge (>=) to match Metal shader's >= comparisons: when two fractions
+        // are equal the point lies on a shared tetrahedron face; both adjacent
+        // tetrahedra yield the same value, but Ge ensures the same vertex is
+        // chosen as Metal (case priority: R>=G>=B first), giving bit-exact parity.
+        auto gt_r_f = hn::Ge(d_r, d_g);  // r >= g  (was Gt)
+        auto gt_g_f = hn::Ge(d_g, d_b);  // g >= b
+        auto gt_b_f = hn::Ge(d_b, d_r);  // b >= r
         auto gt_r = hn::RebindMask(di, gt_r_f);
         auto gt_g = hn::RebindMask(di, gt_g_f);
         auto gt_b = hn::RebindMask(di, gt_b_f);
 
-        auto max_r = hn::AndNot(gt_b, gt_r); // !b>r && r>g
+        auto max_r = hn::AndNot(gt_b, gt_r); // r>=g && !(b>=r)  →  r is strict max
         auto max_g = hn::AndNot(gt_r, gt_g);
         auto max_b = hn::AndNot(gt_g, gt_b);
 
-        auto min_r = hn::AndNot(gt_r, gt_b); // !r>g && b>r
+        auto min_r = hn::AndNot(gt_r, gt_b); // b>=r && !(r>=g)  →  r is strict min
         auto min_g = hn::AndNot(gt_g, gt_r);
         auto min_b = hn::AndNot(gt_b, gt_g);
 
@@ -645,7 +649,8 @@ size_t ProcessPixels3DSIMD_Tetrahedral_RGBA_Bulk(const LutData3D& lut, float* da
         auto rg_min=hn::Min(d_r,d_g), rg_max=hn::Max(d_r,d_g);
         auto x2=hn::Min(rg_min,d_b), mid=hn::Max(rg_min,d_b);
         auto x0=hn::Max(rg_max,d_b), x1=hn::Min(rg_max,mid);
-        auto gt_r_f=hn::Gt(d_r,d_g), gt_g_f=hn::Gt(d_g,d_b), gt_b_f=hn::Gt(d_b,d_r);
+        // Ge (>=) matches Metal shader >= comparisons for bit-exact parity on equal fractions.
+        auto gt_r_f=hn::Ge(d_r,d_g), gt_g_f=hn::Ge(d_g,d_b), gt_b_f=hn::Ge(d_b,d_r);
         auto gt_r=hn::RebindMask(di,gt_r_f), gt_g=hn::RebindMask(di,gt_g_f), gt_b=hn::RebindMask(di,gt_b_f);
         auto max_r=hn::AndNot(gt_b,gt_r), max_g=hn::AndNot(gt_r,gt_g), max_b=hn::AndNot(gt_g,gt_b);
         auto min_r=hn::AndNot(gt_r,gt_b), min_g=hn::AndNot(gt_g,gt_r), min_b=hn::AndNot(gt_b,gt_g);
@@ -709,7 +714,8 @@ size_t ProcessPixels3DSIMD_Tetrahedral_BGRA_Bulk(const LutData3D& lut, float* da
         auto rg_min=hn::Min(d_r,d_g), rg_max=hn::Max(d_r,d_g);
         auto x2=hn::Min(rg_min,d_b), mid=hn::Max(rg_min,d_b);
         auto x0=hn::Max(rg_max,d_b), x1=hn::Min(rg_max,mid);
-        auto gt_r_f=hn::Gt(d_r,d_g), gt_g_f=hn::Gt(d_g,d_b), gt_b_f=hn::Gt(d_b,d_r);
+        // Ge (>=) matches Metal shader >= comparisons for bit-exact parity on equal fractions.
+        auto gt_r_f=hn::Ge(d_r,d_g), gt_g_f=hn::Ge(d_g,d_b), gt_b_f=hn::Ge(d_b,d_r);
         auto gt_r=hn::RebindMask(di,gt_r_f), gt_g=hn::RebindMask(di,gt_g_f), gt_b=hn::RebindMask(di,gt_b_f);
         auto max_r=hn::AndNot(gt_b,gt_r), max_g=hn::AndNot(gt_r,gt_g), max_b=hn::AndNot(gt_g,gt_b);
         auto min_r=hn::AndNot(gt_r,gt_b), min_g=hn::AndNot(gt_g,gt_r), min_b=hn::AndNot(gt_b,gt_g);
@@ -854,26 +860,30 @@ std::array<float, 3> Processor::process3DTetrahedral(const LutData3D& lut, const
     auto c111 = get_lut_val(rx1, gx1, bx1);
     std::array<float, 3> ca, cb;
 
-    // Geometric tetrahedral cut determination
-    if (d_r > d_g) {
-        if (d_g > d_b) {      // R > G > B
+    // Geometric tetrahedral cut determination.
+    // Use >= to match Metal shader's >= case priority (R>=G>=B checked first).
+    // On a shared tetrahedron boundary face (two fractions equal), both adjacent
+    // tetrahedra yield the same interpolated value; >= merely ensures the same
+    // code path as the Metal shader for bit-exact numerical parity.
+    if (d_r >= d_g) {
+        if (d_g >= d_b) {       // R >= G >= B
             ca = get_lut_val(rx1, gx0, bx0);
             cb = get_lut_val(rx1, gx1, bx0);
-        } else if (d_r > d_b) { // R > B > G
+        } else if (d_r >= d_b) { // R >= B > G
             ca = get_lut_val(rx1, gx0, bx0);
             cb = get_lut_val(rx1, gx0, bx1);
-        } else {              // B > R > G
+        } else {                // B > R >= G  (d_b > d_r >= d_g)
             ca = get_lut_val(rx0, gx0, bx1);
             cb = get_lut_val(rx1, gx0, bx1);
         }
     } else {
-        if (d_b > d_g) {      // B > G > R
+        if (d_b >= d_g) {       // B >= G > R
             ca = get_lut_val(rx0, gx0, bx1);
             cb = get_lut_val(rx0, gx1, bx1);
-        } else if (d_b > d_r) { // G > B > R
+        } else if (d_b >= d_r) { // G > B >= R
             ca = get_lut_val(rx0, gx1, bx0);
             cb = get_lut_val(rx0, gx1, bx1);
-        } else {              // G > R > B
+        } else {                // G > R > B  (d_g > d_r > d_b)
             ca = get_lut_val(rx0, gx1, bx0);
             cb = get_lut_val(rx1, gx1, bx0);
         }

@@ -480,6 +480,285 @@ void test_pipeline_lifecycle() {
 }
 
 // ---------------------------------------------------------------------------
+// TEST-BIX-1: Tetrahedral equal-fraction boundary consistency (Ge fix)
+//
+// Verifies that when two or more fractional coordinates are exactly equal,
+// the SIMD bulk path and the scalar path produce bit-exact identical results.
+// Before the fix (Gt), they could take different code paths that yield
+// mathematically equal but numerically distinct floating-point sequences.
+//
+// We construct pixels that lie exactly on each of the 3 shared boundary
+// planes (dr==dg, dg==db, dr==db) and on the main diagonal (dr==dg==db).
+// Each case is processed by both scalar process() and SIMD processPixels()
+// and the outputs must match exactly (bit-exact, not just within tolerance).
+// ---------------------------------------------------------------------------
+void test_tetrahedral_equal_fraction_boundary() {
+    // Use 2×2×2 identity LUT: output = input, so we only care about matching
+    // paths, not the output value itself. Mismatched paths would still give
+    // the same value here, so we use a non-trivial 3×3×3 LUT instead.
+    cubelut::Lut lut;
+    cubelut::LutData3D d3;
+    d3.size = 3;
+    const int N = 3;
+    d3.data.reserve(N * N * N * 3);
+    // Fill with a non-linear, non-symmetric mapping so different vertex paths
+    // would produce numerically different intermediate sums.
+    std::mt19937 rng(0xBEEF);
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    for (int i = 0; i < N * N * N * 3; ++i)
+        d3.data.push_back(dist(rng));
+    lut.grid3D = std::move(d3);
+
+    // Pixels that lie exactly on tetrahedron boundary faces.
+    // Each pixel has two or more fractional components equal.
+    // We use coordinates that map to fractional parts hitting the boundaries:
+    // With size=3, LUT spacing = 0.5. Fractional = (coord * 2) - floor(coord * 2).
+    // coord = 0.25 → scaled = 0.5 → idx=0, frac=0.5
+    // coord = 0.75 → scaled = 1.5 → idx=1, frac=0.5
+    // Using 0.25 / 0.75 gives frac=0.5 for any channel → equal fracs.
+    const std::vector<std::array<float, 3>> boundary_pixels = {
+        {0.25f, 0.25f, 0.10f},  // dr == dg > db  (shared face between case1/case4)
+        {0.10f, 0.25f, 0.25f},  // dg == db > dr  (shared face between case5/case6)
+        {0.25f, 0.10f, 0.25f},  // dr == db > dg  (shared face between case2/case3)
+        {0.25f, 0.25f, 0.25f},  // dr == dg == db (main diagonal)
+        {0.75f, 0.75f, 0.60f},  // another dr==dg point (upper half of LUT)
+        {0.60f, 0.75f, 0.75f},  // another dg==db point
+    };
+
+    int checked = 0;
+    for (const auto& px : boundary_pixels) {
+        // Scalar reference via process()
+        auto scalar = cubelut::Processor::process(
+            lut, px, cubelut::Interpolation::Tetrahedral);
+
+        // SIMD bulk via processPixels (single-pixel forces the tail path too)
+        float buf[3] = {px[0], px[1], px[2]};
+        cubelut::Processor::processPixels(lut, buf, 0, 1,
+                                          cubelut::Interpolation::Tetrahedral);
+
+        // Must be exactly equal — same code path means same FP operations.
+        if (scalar[0] != buf[0] || scalar[1] != buf[1] || scalar[2] != buf[2]) {
+            std::cerr << "test_tetrahedral_equal_fraction_boundary FAILED at pixel ["
+                      << px[0] << "," << px[1] << "," << px[2] << "]\n"
+                      << "  scalar=(" << scalar[0] << "," << scalar[1] << "," << scalar[2] << ")\n"
+                      << "  simd  =(" << buf[0]    << "," << buf[1]    << "," << buf[2]    << ")\n";
+            assert(false);
+        }
+        ++checked;
+    }
+    std::cout << "test_tetrahedral_equal_fraction_boundary passed ("
+              << checked << " boundary pixels, bit-exact)" << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// TEST-BIX-2: All 6 Sakamoto tetrahedral cases — exact vertex verification
+//
+// The 2×2×2 LUT has distinct values at all 8 corners. We choose one pixel
+// per Sakamoto case (strict ordering) and verify the output against the
+// hand-computed formula using exact corner values from the LUT.
+//
+// LUT layout (Blue-major/R-fastest, size=2):
+//   idx = b*4 + g*2 + r   → values below
+// ---------------------------------------------------------------------------
+void test_tetrahedral_all_6_cases() {
+    cubelut::Lut lut;
+    cubelut::LutData3D d3;
+    d3.size = 2;
+    // Assign unique, easily-verifiable values per corner.
+    // Each corner stores (R_out, G_out, B_out) chosen so the case formula
+    // gives a distinctive result we can check analytically.
+    //
+    // Corner layout: [b][g][r] — stored R-fastest:
+    //   b=0,g=0,r=0 → c000   b=0,g=0,r=1 → c100
+    //   b=0,g=1,r=0 → c010   b=0,g=1,r=1 → c110
+    //   b=1,g=0,r=0 → c001   b=1,g=0,r=1 → c101
+    //   b=1,g=1,r=0 → c011   b=1,g=1,r=1 → c111
+    d3.data = {
+        // b=0
+        0.0f, 0.0f, 0.0f,   // c000
+        1.0f, 0.0f, 0.0f,   // c100
+        0.0f, 1.0f, 0.0f,   // c010
+        1.0f, 1.0f, 0.0f,   // c110
+        // b=1
+        0.0f, 0.0f, 1.0f,   // c001
+        1.0f, 0.0f, 1.0f,   // c101
+        0.0f, 1.0f, 1.0f,   // c011
+        1.0f, 1.0f, 1.0f,   // c111
+    };
+    lut.grid3D = std::move(d3);
+
+    // For a 2×2×2 LUT, any coordinate in [0,1] has idx=0 and frac=coord.
+    // So dr=R, dg=G, db=B directly. The 6 cases and expected outputs are:
+    //
+    // Case 1 (dr>=dg>=db): R=0.9, G=0.5, B=0.2
+    //   c000+(0.9)(c100-c000)+(0.5)(c110-c100)+(0.2)(c111-c110)
+    //   R_out: 0+(0.9)(1)+(0.5)(0)+(0.2)(0)  = 0.9
+    //   G_out: 0+(0.9)(0)+(0.5)(1)+(0.2)(0)  = 0.5
+    //   B_out: 0+(0.9)(0)+(0.5)(0)+(0.2)(1)  = 0.2
+    //
+    // Case 2 (dr>=db>=dg): R=0.9, G=0.1, B=0.5
+    //   c000+(0.9)(c100-c000)+(0.5)(c101-c100)+(0.1)(c111-c101)
+    //   R_out: 0+(0.9)(1)+(0.5)(0)+(0.1)(0)  = 0.9
+    //   G_out: 0+(0.9)(0)+(0.5)(0)+(0.1)(1)  = 0.1
+    //   B_out: 0+(0.9)(0)+(0.5)(1)+(0.1)(0)  = 0.5
+    //
+    // Case 3 (db>=dr>=dg): R=0.5, G=0.1, B=0.9
+    //   c000+(0.9)(c001-c000)+(0.5)(c101-c001)+(0.1)(c111-c101)
+    //   R_out: 0+(0.9)(0)+(0.5)(1)+(0.1)(0)  = 0.5
+    //   G_out: 0+(0.9)(0)+(0.5)(0)+(0.1)(1)  = 0.1
+    //   B_out: 0+(0.9)(1)+(0.5)(0)+(0.1)(0)  = 0.9
+    //
+    // Case 4 (dg>=dr>=db): R=0.5, G=0.9, B=0.2
+    //   c000+(0.9)(c010-c000)+(0.5)(c110-c010)+(0.2)(c111-c110)
+    //   R_out: 0+(0.9)(0)+(0.5)(1)+(0.2)(0)  = 0.5
+    //   G_out: 0+(0.9)(1)+(0.5)(0)+(0.2)(0)  = 0.9
+    //   B_out: 0+(0.9)(0)+(0.5)(0)+(0.2)(1)  = 0.2
+    //
+    // Case 5 (dg>=db>=dr): R=0.1, G=0.9, B=0.5
+    //   c000+(0.9)(c010-c000)+(0.5)(c011-c010)+(0.1)(c111-c011)
+    //   R_out: 0+(0.9)(0)+(0.5)(0)+(0.1)(1)  = 0.1
+    //   G_out: 0+(0.9)(1)+(0.5)(0)+(0.1)(0)  = 0.9
+    //   B_out: 0+(0.9)(0)+(0.5)(1)+(0.1)(0)  = 0.5
+    //
+    // Case 6 (db>=dg>=dr): R=0.1, G=0.5, B=0.9
+    //   c000+(0.9)(c001-c000)+(0.5)(c011-c001)+(0.1)(c111-c011)
+    //   R_out: 0+(0.9)(0)+(0.5)(0)+(0.1)(1)  = 0.1
+    //   G_out: 0+(0.9)(0)+(0.5)(1)+(0.1)(0)  = 0.5
+    //   B_out: 0+(0.9)(1)+(0.5)(0)+(0.1)(0)  = 0.9
+
+    struct CaseSpec {
+        const char*             name;
+        std::array<float, 3>    pixel;
+        std::array<float, 3>    expected;
+    };
+    const CaseSpec cases[] = {
+        {"Case1 dr>=dg>=db", {0.9f, 0.5f, 0.2f}, {0.9f, 0.5f, 0.2f}},
+        {"Case2 dr>=db>=dg", {0.9f, 0.1f, 0.5f}, {0.9f, 0.1f, 0.5f}},
+        {"Case3 db>=dr>=dg", {0.5f, 0.1f, 0.9f}, {0.5f, 0.1f, 0.9f}},
+        {"Case4 dg>=dr>=db", {0.5f, 0.9f, 0.2f}, {0.5f, 0.9f, 0.2f}},
+        {"Case5 dg>=db>=dr", {0.1f, 0.9f, 0.5f}, {0.1f, 0.9f, 0.5f}},
+        {"Case6 db>=dg>=dr", {0.1f, 0.5f, 0.9f}, {0.1f, 0.5f, 0.9f}},
+    };
+
+    constexpr float tol = 1e-6f;
+    for (const auto& c : cases) {
+        auto r = cubelut::Processor::process(
+            lut, c.pixel, cubelut::Interpolation::Tetrahedral);
+        for (int ch = 0; ch < 3; ++ch) {
+            float diff = std::abs(r[ch] - c.expected[ch]);
+            if (diff >= tol) {
+                std::cerr << "test_tetrahedral_all_6_cases FAILED at " << c.name
+                          << " ch=" << ch
+                          << " expected=" << c.expected[ch]
+                          << " got=" << r[ch]
+                          << " diff=" << diff << "\n";
+                assert(false);
+            }
+        }
+    }
+    std::cout << "test_tetrahedral_all_6_cases passed (6 cases, tol=" << tol << ")" << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// TEST-BIX-3: RGBA / BGRA pixel-layout variants — equal-fraction boundary
+//
+// Ensures the Ge fix was applied correctly to the RGBA and BGRA SIMD paths
+// (ProcessPixels3DSIMD_Tetrahedral_RGBA_Bulk and _BGRA_Bulk) by comparing
+// their output against the scalar reference for equal-fraction pixels.
+// ---------------------------------------------------------------------------
+void test_tetrahedral_layout_variants_boundary() {
+    // Use the 5×5×5 non-trivial LUT from the existing helpers.
+    auto lut = make_5x5x5_lut();
+
+    // Pixels that produce equal fractional coordinates in the 5×5×5 grid
+    // (spacing 0.25): coord = k * 0.25 gives frac = 0.0 or 0.5.
+    // Mix equal and unequal fracs to exercise boundary and interior.
+    const std::vector<std::array<float, 3>> pixels = {
+        {0.25f, 0.25f, 0.10f},  // dr == dg  (boundary)
+        {0.10f, 0.25f, 0.25f},  // dg == db  (boundary)
+        {0.25f, 0.10f, 0.25f},  // dr == db  (boundary)
+        {0.25f, 0.25f, 0.25f},  // all equal (diagonal)
+        {0.30f, 0.70f, 0.20f},  // interior (no ties)
+    };
+    constexpr int N = 5;
+
+    for (const auto& px : pixels) {
+        // Scalar reference
+        auto ref = cubelut::Processor::process(
+            lut, px, cubelut::Interpolation::Tetrahedral);
+
+        // ── RGBA layout ───────────────────────────────────────────────────
+        {
+            // Build 2N+1 RGBA pixels; N pixels before + 1 target + N after.
+            // Using N=5 ensures the target pixel is never in the first bulk
+            // chunk and also tests partial-tail alignment.
+            std::vector<float> rgba_buf((N * 2 + 1) * 4, 0.5f);
+            const int target = N;  // middle pixel index
+            rgba_buf[target * 4 + 0] = px[0];
+            rgba_buf[target * 4 + 1] = px[1];
+            rgba_buf[target * 4 + 2] = px[2];
+            rgba_buf[target * 4 + 3] = 0.77f;  // alpha: must pass through unchanged
+
+            cubelut::Processor::processImage(
+                lut, rgba_buf.data(),
+                static_cast<size_t>(N * 2 + 1), 1,
+                cubelut::PixelLayout::RGBA_F32,
+                cubelut::Interpolation::Tetrahedral);
+
+            constexpr float tol = 1e-5f;
+            for (int ch = 0; ch < 3; ++ch) {
+                float diff = std::abs(rgba_buf[target * 4 + ch] - ref[ch]);
+                if (diff >= tol) {
+                    std::cerr << "RGBA layout mismatch ch=" << ch
+                              << " px=[" << px[0] << "," << px[1] << "," << px[2] << "]"
+                              << " ref=" << ref[ch]
+                              << " got=" << rgba_buf[target * 4 + ch] << "\n";
+                    assert(false);
+                }
+            }
+            // Alpha must be untouched.
+            assert(rgba_buf[target * 4 + 3] == 0.77f);
+        }
+
+        // ── BGRA layout ───────────────────────────────────────────────────
+        {
+            std::vector<float> bgra_buf((N * 2 + 1) * 4, 0.5f);
+            const int target = N;
+            // BGRA: B first, R third
+            bgra_buf[target * 4 + 0] = px[2];   // B
+            bgra_buf[target * 4 + 1] = px[1];   // G
+            bgra_buf[target * 4 + 2] = px[0];   // R
+            bgra_buf[target * 4 + 3] = 0.88f;   // alpha passthrough
+
+            cubelut::Processor::processImage(
+                lut, bgra_buf.data(),
+                static_cast<size_t>(N * 2 + 1), 1,
+                cubelut::PixelLayout::BGRA_F32,
+                cubelut::Interpolation::Tetrahedral);
+
+            constexpr float tol = 1e-5f;
+            // BGRA output: [B_out, G_out, R_out, A]
+            float diffs[3] = {
+                std::abs(bgra_buf[target * 4 + 2] - ref[0]),  // R channel
+                std::abs(bgra_buf[target * 4 + 1] - ref[1]),  // G channel
+                std::abs(bgra_buf[target * 4 + 0] - ref[2]),  // B channel
+            };
+            for (int ch = 0; ch < 3; ++ch) {
+                if (diffs[ch] >= tol) {
+                    std::cerr << "BGRA layout mismatch ch=" << ch
+                              << " px=[" << px[0] << "," << px[1] << "," << px[2] << "]"
+                              << " diff=" << diffs[ch] << "\n";
+                    assert(false);
+                }
+            }
+            assert(bgra_buf[target * 4 + 3] == 0.88f);
+        }
+    }
+    std::cout << "test_tetrahedral_layout_variants_boundary passed ("
+              << pixels.size() << " pixels × RGBA + BGRA)" << std::endl;
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main() {
@@ -507,5 +786,12 @@ int main() {
     test_pipeline_process_pixels();
     test_pipeline_lifecycle();
 
+    // --- TEST-BIX: Tetrahedral Ge fix & case coverage ---
+    test_tetrahedral_equal_fraction_boundary();   // Ge fix: SIMD/scalar bit-exact on boundary
+    test_tetrahedral_all_6_cases();               // all 6 Sakamoto cases with exact expected values
+    test_tetrahedral_layout_variants_boundary();  // RGBA/BGRA SIMD paths also use Ge
+
+    std::cout << "\nAll tests passed." << std::endl;
     return 0;
 }
+
