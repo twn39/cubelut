@@ -72,3 +72,5 @@ diff.png
 build_ios
 build_ios_sim
 build_mac
+# XCFramework intermediate trees (Espresso scripts/build_cubelut_xcframework.sh)
+build_xcframework/

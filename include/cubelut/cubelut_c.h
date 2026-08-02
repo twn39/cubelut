@@ -11,15 +11,42 @@ extern "C" {
 // Opaque handle for the LUT object
 typedef struct cubelut_lut_t cubelut_lut_t;
 
+// ---------------------------------------------------------------------------
+// Structured parse errors (thread-local last-error after a failed load)
+// ---------------------------------------------------------------------------
+
+typedef enum {
+    CUBELUT_PARSE_OK = 0,
+    CUBELUT_PARSE_FILE_NOT_FOUND,
+    CUBELUT_PARSE_FILE_READ_ERROR,
+    CUBELUT_PARSE_MISSING_LUT_SIZE,
+    CUBELUT_PARSE_INVALID_LUT_SIZE,
+    CUBELUT_PARSE_INVALID_DOMAIN,
+    CUBELUT_PARSE_INSUFFICIENT_DATA,
+    CUBELUT_PARSE_UNKNOWN
+} cubelut_parse_error_t;
+
+/**
+ * Last error code from cubelut_load_from_file / cubelut_load_from_string
+ * on the calling thread. CUBELUT_PARSE_OK after a successful load.
+ */
+cubelut_parse_error_t cubelut_get_last_error(void);
+
+/**
+ * Human-readable detail for the last load error (never NULL).
+ * Valid until the next load call on the same thread.
+ */
+const char* cubelut_get_last_error_message(void);
+
 /**
  * Parses a .cube file and creates a LUT object.
- * Returns NULL if parsing fails or the file is not found.
+ * Returns NULL on failure; inspect cubelut_get_last_error().
  */
 cubelut_lut_t* cubelut_load_from_file(const char* file_path);
 
 /**
  * Parses a .cube content string and creates a LUT object.
- * Returns NULL if parsing fails.
+ * Returns NULL on failure; inspect cubelut_get_last_error().
  */
 cubelut_lut_t* cubelut_load_from_string(const char* content);
 
@@ -70,8 +97,47 @@ float* cubelut_create_rgba_buffer_for_grid3d(const cubelut_lut_t* lut, size_t* o
  * @param lut The LUT object.
  * @param out_byte_size Returns the total size in bytes of the returned buffer.
  * @return A pointer to the newly allocated uint16_t array. Caller must free using cubelut_free_buffer().
+ *
+ * @note This exports the **raw 3D grid lattice only**. It does **not** apply a 1D shaper
+ *       or non-unit DOMAIN. Prefer cubelut_create_rgba16_for_gpu_export() for Metal/Vulkan.
  */
 uint16_t* cubelut_create_rgba16_buffer_for_grid3d(const cubelut_lut_t* lut, size_t* out_byte_size);
+
+/**
+ * Returns true when a raw grid3d upload would NOT match CPU Processor::process()
+ * for unit-cube lattice coordinates [0,1]³.
+ *
+ * True when:
+ *   - a 1D shaper is present, or
+ *   - 3D DOMAIN_MIN/MAX is not approximately [0,1], or
+ *   - there is no 3D grid (shaper-only; must bake to 3D for GPU)
+ */
+bool cubelut_needs_gpu_pipeline_bake(const cubelut_lut_t* lut);
+
+/**
+ * Grid size that cubelut_create_rgba16_for_gpu_export() will produce.
+ * Prefers native 3D size; falls back to 33 when only a 1D shaper exists.
+ * Returns 0 if the LUT is NULL or invalid for GPU export.
+ */
+int cubelut_gpu_export_grid_size(const cubelut_lut_t* lut);
+
+/**
+ * Builds an RGBA16Float 3D texture payload for GPU tetrahedral sampling under the
+ * Espresso/Metal contract: sample coordinates in linear [0,1]³ map to the lattice.
+ *
+ * When cubelut_needs_gpu_pipeline_bake() is true, samples the full CPU pipeline
+ * (shaper + domain + 3D) onto an identity lattice, then packs FP16.
+ * Otherwise packs the native 3D grid (same as cubelut_create_rgba16_buffer_for_grid3d).
+ *
+ * @param out_byte_size  Total bytes of returned buffer (size³ × 4 × 2).
+ * @param out_grid_size  Optional; receives lattice dimension N (texture width/height/depth).
+ * @return Heap buffer; free with cubelut_free_buffer(). NULL on failure.
+ */
+uint16_t* cubelut_create_rgba16_for_gpu_export(
+    const cubelut_lut_t* lut,
+    size_t* out_byte_size,
+    int* out_grid_size
+);
 
 /**
  * Gets a direct, zero-copy pointer to the internal RGB floating-point data for the 3D Grid.

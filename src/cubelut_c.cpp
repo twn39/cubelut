@@ -4,6 +4,7 @@
 #include "cubelut/lut.hpp"
 #include "cubelut/baker.hpp"
 #include "cubelut/writer.hpp"
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -13,29 +14,100 @@ struct cubelut_lut_t {
     cubelut::Lut inner;
 };
 
+// Thread-local diagnostics for the C load APIs (Swift-friendly).
+namespace {
+thread_local cubelut_parse_error_t g_last_error = CUBELUT_PARSE_OK;
+thread_local std::string g_last_error_message;
+
+cubelut_parse_error_t to_c_error(cubelut::ParseError e) {
+    switch (e) {
+    case cubelut::ParseError::None:                    return CUBELUT_PARSE_OK;
+    case cubelut::ParseError::FileNotFound:            return CUBELUT_PARSE_FILE_NOT_FOUND;
+    case cubelut::ParseError::FileReadError:           return CUBELUT_PARSE_FILE_READ_ERROR;
+    case cubelut::ParseError::MissingLutSizeDirective: return CUBELUT_PARSE_MISSING_LUT_SIZE;
+    case cubelut::ParseError::InvalidLutSize:          return CUBELUT_PARSE_INVALID_LUT_SIZE;
+    case cubelut::ParseError::InvalidDomain:           return CUBELUT_PARSE_INVALID_DOMAIN;
+    case cubelut::ParseError::InsufficientData:        return CUBELUT_PARSE_INSUFFICIENT_DATA;
+    }
+    return CUBELUT_PARSE_UNKNOWN;
+}
+
+void clear_last_error() {
+    g_last_error = CUBELUT_PARSE_OK;
+    g_last_error_message.clear();
+}
+
+void set_last_error(const cubelut::ParseResult& result) {
+    g_last_error = to_c_error(result.error);
+    g_last_error_message = result.errorMessage.empty()
+        ? std::string(cubelut::parseErrorToString(result.error))
+        : result.errorMessage;
+}
+
+void set_last_error_simple(cubelut_parse_error_t code, const char* msg) {
+    g_last_error = code;
+    g_last_error_message = msg ? msg : "";
+}
+
+bool near_unit_domain(const cubelut::Domain& d) {
+    constexpr float eps = 1e-5f;
+    for (int i = 0; i < 3; ++i) {
+        if (std::fabs(d.min[i]) > eps) return false;
+        if (std::fabs(d.max[i] - 1.0f) > eps) return false;
+    }
+    return true;
+}
+} // namespace
+
 
 extern "C" {
 
+cubelut_parse_error_t cubelut_get_last_error(void) {
+    return g_last_error;
+}
+
+const char* cubelut_get_last_error_message(void) {
+    return g_last_error_message.c_str();
+}
+
 cubelut_lut_t* cubelut_load_from_file(const char* file_path) {
-    if (!file_path) return nullptr;
-    
-    std::optional<cubelut::Lut> result = cubelut::Parser::fromFile(file_path);
-    if (!result || !result->isValid()) {
+    if (!file_path) {
+        set_last_error_simple(CUBELUT_PARSE_FILE_NOT_FOUND, "file_path is NULL");
         return nullptr;
     }
-    
-    return new cubelut_lut_t{std::move(*result)};
+
+    cubelut::ParseResult result = cubelut::Parser::parseFile(file_path);
+    if (!result.ok() || !result.lut->isValid()) {
+        if (result.ok() && result.lut && !result.lut->isValid()) {
+            set_last_error_simple(CUBELUT_PARSE_UNKNOWN, "Parsed LUT failed isValid()");
+        } else {
+            set_last_error(result);
+        }
+        return nullptr;
+    }
+
+    clear_last_error();
+    return new cubelut_lut_t{std::move(*result.lut)};
 }
 
 cubelut_lut_t* cubelut_load_from_string(const char* content) {
-    if (!content) return nullptr;
-    
-    std::optional<cubelut::Lut> result = cubelut::Parser::fromString(content);
-    if (!result || !result->isValid()) {
+    if (!content) {
+        set_last_error_simple(CUBELUT_PARSE_UNKNOWN, "content is NULL");
         return nullptr;
     }
-    
-    return new cubelut_lut_t{std::move(*result)};
+
+    cubelut::ParseResult result = cubelut::Parser::parseString(content);
+    if (!result.ok() || !result.lut->isValid()) {
+        if (result.ok() && result.lut && !result.lut->isValid()) {
+            set_last_error_simple(CUBELUT_PARSE_UNKNOWN, "Parsed LUT failed isValid()");
+        } else {
+            set_last_error(result);
+        }
+        return nullptr;
+    }
+
+    clear_last_error();
+    return new cubelut_lut_t{std::move(*result.lut)};
 }
 
 void cubelut_free(cubelut_lut_t* lut) {
@@ -94,6 +166,54 @@ uint16_t* cubelut_create_rgba16_buffer_for_grid3d(const cubelut_lut_t* lut, size
     // SIMD-accelerated RGB float32 → RGBA float16 conversion via Highway DemoteTo.
     cubelut::Processor::convertRGBToRGBA16(lut->inner.grid3D->data.data(), rgba16, num_pixels);
 
+    return rgba16;
+}
+
+bool cubelut_needs_gpu_pipeline_bake(const cubelut_lut_t* lut) {
+    if (!lut) return false;
+    if (cubelut_has_shaper1d(lut)) return true;
+    if (!cubelut_has_grid3d(lut)) return true;
+    return !near_unit_domain(lut->inner.grid3D->domain);
+}
+
+int cubelut_gpu_export_grid_size(const cubelut_lut_t* lut) {
+    if (!lut || !lut->inner.isValid()) return 0;
+    if (cubelut_has_grid3d(lut)) return lut->inner.grid3D->size;
+    // Shaper-only: default lattice density for GPU bake.
+    return 33;
+}
+
+uint16_t* cubelut_create_rgba16_for_gpu_export(
+    const cubelut_lut_t* lut,
+    size_t* out_byte_size,
+    int* out_grid_size)
+{
+    if (!lut || !out_byte_size || !lut->inner.isValid()) return nullptr;
+
+    const int size = cubelut_gpu_export_grid_size(lut);
+    if (size < 2) return nullptr;
+
+    if (out_grid_size) *out_grid_size = size;
+
+    // Fast path: pure 3D grid with unit domain — zero-copy lattice pack.
+    if (!cubelut_needs_gpu_pipeline_bake(lut) && cubelut_has_grid3d(lut)
+        && lut->inner.grid3D->size == size) {
+        return cubelut_create_rgba16_buffer_for_grid3d(lut, out_byte_size);
+    }
+
+    // Bake full CPU pipeline (shaper + domain + 3D) onto a unit-cube identity lattice.
+    cubelut::LutData3D lattice = cubelut::Baker::makeIdentity3D(size);
+    const size_t num_pixels = static_cast<size_t>(size) * size * size;
+    cubelut::Processor::processPixels(
+        lut->inner,
+        lattice.data.data(),
+        0,
+        num_pixels,
+        cubelut::Interpolation::Tetrahedral);
+
+    *out_byte_size = num_pixels * 4 * sizeof(uint16_t);
+    uint16_t* rgba16 = new uint16_t[num_pixels * 4];
+    cubelut::Processor::convertRGBToRGBA16(lattice.data.data(), rgba16, num_pixels);
     return rgba16;
 }
 

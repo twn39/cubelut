@@ -210,6 +210,9 @@ ParseResult Parser::parseString(std::string_view content) {
                 result.errorMessage = "DOMAIN_MIN contains an unparseable float value";
                 return result;
             }
+            // Apply to the stage currently being defined (domain may appear before or after SIZE).
+            if (lut.grid3D.has_value())  lut.grid3D->domain.min  = current_domain.min;
+            if (lut.shaper1D.has_value()) lut.shaper1D->domain.min = current_domain.min;
             skip_line();
             continue;
         }
@@ -227,6 +230,8 @@ ParseResult Parser::parseString(std::string_view content) {
                 result.errorMessage = "DOMAIN_MAX contains an unparseable float value";
                 return result;
             }
+            if (lut.grid3D.has_value())  lut.grid3D->domain.max  = current_domain.max;
+            if (lut.shaper1D.has_value()) lut.shaper1D->domain.max = current_domain.max;
             skip_line();
             continue;
         }
@@ -243,6 +248,8 @@ ParseResult Parser::parseString(std::string_view content) {
                 result.errorMessage = "LUT_*_INPUT_RANGE contains an unparseable float value";
                 return result;
             }
+            if (lut.grid3D.has_value())  lut.grid3D->domain  = current_domain;
+            if (lut.shaper1D.has_value()) lut.shaper1D->domain = current_domain;
             skip_line();
             continue;
         }
