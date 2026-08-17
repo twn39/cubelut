@@ -110,6 +110,48 @@ cubelut_lut_t* cubelut_load_from_string(const char* content) {
     return new cubelut_lut_t{std::move(*result.lut)};
 }
 
+cubelut_lut_t* cubelut_load_from_grid3d(
+    int size,
+    const float* rgb,
+    size_t rgb_count,
+    float min_r, float min_g, float min_b,
+    float max_r, float max_g, float max_b
+) {
+    if (size < 2) {
+        set_last_error_simple(CUBELUT_PARSE_INVALID_LUT_SIZE, "grid size must be >= 2");
+        return nullptr;
+    }
+    if (!rgb) {
+        set_last_error_simple(CUBELUT_PARSE_INSUFFICIENT_DATA, "rgb is NULL");
+        return nullptr;
+    }
+    const size_t expected =
+        static_cast<size_t>(size) * static_cast<size_t>(size) * static_cast<size_t>(size) * 3;
+    if (rgb_count != expected) {
+        set_last_error_simple(CUBELUT_PARSE_INSUFFICIENT_DATA, "rgb_count != size^3 * 3");
+        return nullptr;
+    }
+    if (!(max_r > min_r && max_g > min_g && max_b > min_b)) {
+        set_last_error_simple(CUBELUT_PARSE_INVALID_DOMAIN, "DOMAIN_MAX must be greater than DOMAIN_MIN");
+        return nullptr;
+    }
+
+    cubelut::Lut lut;
+    cubelut::LutData3D d3;
+    d3.size = size;
+    d3.domain.min = {min_r, min_g, min_b};
+    d3.domain.max = {max_r, max_g, max_b};
+    d3.data.assign(rgb, rgb + rgb_count);
+    lut.grid3D = std::move(d3);
+    if (!lut.isValid()) {
+        set_last_error_simple(CUBELUT_PARSE_UNKNOWN, "grid3d LUT failed isValid()");
+        return nullptr;
+    }
+
+    clear_last_error();
+    return new cubelut_lut_t{std::move(lut)};
+}
+
 void cubelut_free(cubelut_lut_t* lut) {
     delete lut;
 }

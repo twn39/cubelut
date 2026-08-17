@@ -48,7 +48,19 @@ cubelut_lut_t* cubelut_load_from_file(const char* file_path);
  * Parses a .cube content string and creates a LUT object.
  * Returns NULL on failure; inspect cubelut_get_last_error().
  */
-cubelut_lut_t* cubelut_load_from_string(const char* content);
+        cubelut_lut_t* cubelut_load_from_string(const char* content);
+
+/**
+ * Builds a 3D-only LUT from an RGB lattice (Iridas .cube order: blue-major, red-fastest).
+ * `rgb_count` must equal size³ × 3. Returns NULL on failure; inspect cubelut_get_last_error().
+ */
+cubelut_lut_t* cubelut_load_from_grid3d(
+    int size,
+    const float* rgb,
+    size_t rgb_count,
+    float min_r, float min_g, float min_b,
+    float max_r, float max_g, float max_b
+);
 
 /**
  * Frees the LUT object.
